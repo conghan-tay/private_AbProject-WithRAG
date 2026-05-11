@@ -1,0 +1,12 @@
+Missing Content Page
+
+Build steps no explicit steps for Test client and e2e tests
+// NEED TO BRING THIS INFRONT
+
+Retrieve  from DB. Decrypt file bytes using AES-256 key from settings.
+
+Few things I need clarification: 1. Services. There are Dedup Service, Storage Service and Encryption Service. Which service handles Upload and Download. Can there be a Search/Analytics service which does quota/storage computation and search?
+1. Can this services be easily extracted and scaled independently if we need to extend their features?
+2. E2E test is at Step 13 and Documentation is at Step 14.  Can we bring them forward to after Step 1, so I can consistently track our progress by the passing and failing tests.
+
+DRF file viewset thin orchestration layer
