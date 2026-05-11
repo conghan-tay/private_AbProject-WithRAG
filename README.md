@@ -10,13 +10,56 @@ Abnormal File Vault is a Django REST API for secure file storage with SHA-256 de
 - **Service layer:** `DeduplicationService`, `EncryptionService`, and `FileQueryService` own business logic. Views remain thin orchestrators.
 - **Operational controls:** Rate limits and quotas are configured in Django settings so thresholds can change without code changes.
 
-## Local Setup
+## Prerequisites
+
+- Docker Desktop or Docker Engine with Docker Compose v2.
+- Python `3.10.19`, matching `.python-version`.
+- `pip`, included with a normal Python install.
+
+Confirm the tools are available:
+
+```bash
+docker --version
+docker compose version
+python --version
+python -m pip --version
+```
+
+## Local Python Setup
+
+Create and activate a virtual environment from the repository root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Install local development and test dependencies:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r backend/requirements.txt
+```
+
+This installs Django, Django REST Framework, `requests`, `pytest`, and the other backend dependencies needed for local development and E2E test commands.
+
+When you open a new terminal, reactivate the environment before running Python commands:
+
+```bash
+source .venv/bin/activate
+```
+
+## Docker Setup
 
 Build and start the API:
 
 ```bash
 docker compose up --build
 ```
+
+This command rebuilds the backend image from `backend/Dockerfile` and starts the container from that image. It is usually enough for testing API changes because the Dockerfile copies the backend source code into the image.
+
+Re-run it after changing API code, `backend/Dockerfile`, or `backend/requirements.txt`.
 
 The API is available at:
 
@@ -30,14 +73,46 @@ Useful smoke check:
 curl -H "UserId: local-dev" http://localhost:8000/api/files/
 ```
 
+Stop the running container with `Ctrl+C`, or from another terminal:
+
+```bash
+docker compose down
+```
+
+## Fresh Data Reset
+
+The Docker setup uses named volumes for SQLite data and uploaded media. Rebuilding the image does not erase those volumes.
+
+To wipe local API data and start from an empty database/media store:
+
+```bash
+docker compose down -v
+docker compose up --build
+```
+
+The `-v` flag deletes named Docker volumes, including the SQLite database and uploaded files. Use it only when you intentionally want a clean local state.
+
 ## E2E Progress Dashboard
 
 Step 2 adds a requests-based E2E test client. These tests intentionally assert the final PRD contract, so they are expected to fail until the later build-plan steps are implemented.
 
-Run the dashboard:
+Run the API in one terminal:
 
 ```bash
+docker compose up --build
+```
+
+Run the dashboard from the repository root in a second terminal:
+
+```bash
+source .venv/bin/activate
 python -m pytest tests/e2e -q
+```
+
+If you are already inside the `tests/` directory, run:
+
+```bash
+python -m pytest e2e -q
 ```
 
 Override the API target when needed:
@@ -47,6 +122,18 @@ FILE_VAULT_BASE_URL=http://localhost:8000 python -m pytest tests/e2e -q
 ```
 
 If the server is not running, the suite fails with a clear startup message instead of connection noise.
+
+## Common Commands
+
+| Task | Command |
+| --- | --- |
+| Install local dependencies | `python -m pip install -r backend/requirements.txt` |
+| Start or rebuild the API | `docker compose up --build` |
+| Stop containers | `docker compose down` |
+| Reset local Docker data | `docker compose down -v` |
+| Run E2E tests from repo root | `python -m pytest tests/e2e -q` |
+| Run E2E tests from `tests/` | `python -m pytest e2e -q` |
+| Smoke-test file list endpoint | `curl -H "UserId: local-dev" http://localhost:8000/api/files/` |
 
 ## API Service Map
 
