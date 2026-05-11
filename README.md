@@ -133,6 +133,7 @@ If the server is not running, the suite fails with a clear startup message inste
 | Start or rebuild the API | `docker compose up --build` |
 | Stop containers | `docker compose down` |
 | Reset local Docker data | `docker compose down -v` |
+| Run backend file tests | `python -m pytest backend/files/tests -v` |
 | Run E2E tests from repo root | `python -m pytest tests/e2e -q` |
 | Run E2E tests from `tests/` | `python -m pytest e2e -q` |
 | Smoke-test file list endpoint | `curl -H "UserId: local-dev" http://localhost:8000/api/files/` |
