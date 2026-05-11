@@ -1,4 +1,4 @@
-FROM python:3.10
+FROM python:3.10.19-slim-bookworm
 
 WORKDIR /app
 
@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
+    libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
