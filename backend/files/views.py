@@ -1,14 +1,18 @@
-from django.shortcuts import render
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from .models import File
 from .serializers import FileSerializer
 
-# Create your views here.
 
 class FileViewSet(viewsets.ModelViewSet):
     queryset = File.objects.all()
     serializer_class = FileSerializer
+
+    def get_queryset(self):
+        user_id = getattr(self.request, 'user_id', None)
+        if not user_id:
+            return File.objects.none()
+        return File.objects.filter(user_id=user_id)
 
     def create(self, request, *args, **kwargs):
         file_obj = request.FILES.get('file')

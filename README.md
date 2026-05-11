@@ -5,7 +5,7 @@ Abnormal File Vault is a Django REST API for secure file storage with SHA-256 de
 ## Architecture Overview
 
 - **Runtime:** Django REST Framework behind Gunicorn on port `8000`.
-- **Identity:** Every API request uses a `UserId` header. Full authentication is intentionally out of scope for this challenge.
+- **Identity:** API routes under `/api/` require a non-empty `UserId` header. Full authentication is intentionally out of scope for this challenge.
 - **Persistence:** SQLite stores file metadata; Django `FileField` storage writes encrypted file bytes to the Docker media volume.
 - **Service layer:** `DeduplicationService`, `EncryptionService`, and `FileQueryService` own business logic. Views remain thin orchestrators.
 - **Operational controls:** Rate limits and quotas are configured in Django settings so thresholds can change without code changes.
@@ -72,6 +72,8 @@ Useful smoke check:
 ```bash
 curl -H "UserId: local-dev" http://localhost:8000/api/files/
 ```
+
+Requests to `/api/` without `UserId` return `401`; empty or whitespace-only values return `400`.
 
 Stop the running container with `Ctrl+C`, or from another terminal:
 
@@ -151,7 +153,9 @@ If the server is not running, the suite fails with a clear startup message inste
 
 - Step 1: Project setup and dependency baseline.
 - Step 2: E2E client skeleton and README skeleton. The E2E suite is now the progress dashboard.
-- Steps 3-13: Implement model, auth middleware, upload, encryption, deduplication, filtering, delete cascade, stats, throttling, quotas, and edge cases.
+- Step 3: PRD file model and indexes.
+- Step 4: API-scoped `UserIdMiddleware`, including 401/400 auth errors and per-user queryset scoping.
+- Steps 5-13: Implement upload, encryption, deduplication, filtering, delete cascade, stats, throttling, quotas, and edge cases.
 - Step 14: Finalize README with full API docs, configuration reference, and operational notes.
 
 ## Configuration Reference
