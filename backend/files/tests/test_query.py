@@ -44,6 +44,9 @@ class FileQueryTests(TestCase):
         file_type='text/plain',
         size=100,
         uploaded_at=None,
+        file_hash=None,
+        is_reference=False,
+        original_file=None,
     ):
         hash_source = f'{user_id}:{filename}:{file_type}:{size}'.encode('utf-8')
         record = File.objects.create(
@@ -51,8 +54,9 @@ class FileQueryTests(TestCase):
             original_filename=filename,
             file_type=file_type,
             size=size,
-            file_hash=hashlib.sha256(hash_source).hexdigest(),
-            is_reference=False,
+            file_hash=file_hash or hashlib.sha256(hash_source).hexdigest(),
+            is_reference=is_reference,
+            original_file=original_file,
             reference_count=1,
         )
         if uploaded_at is not None:
@@ -62,6 +66,12 @@ class FileQueryTests(TestCase):
 
     def list_files(self, params=None, user_id='query-user'):
         return self.client.get(self.url, params or {}, HTTP_USERID=user_id)
+
+    def storage_stats(self, user_id='query-user'):
+        return self.client.get(reverse('file-storage-stats'), HTTP_USERID=user_id)
+
+    def file_types(self, user_id='query-user'):
+        return self.client.get(reverse('file-file-types'), HTTP_USERID=user_id)
 
     def result_names(self, response):
         return [item['original_filename'] for item in response.json()['results']]
@@ -190,3 +200,79 @@ class FileQueryTests(TestCase):
 
         assert response.status_code == 400
         assert 'start_date' in response.json()
+
+    def test_storage_stats_empty_user_returns_zero_totals(self):
+        response = self.storage_stats()
+
+        assert response.status_code == 200
+        assert response.json() == {
+            'user_id': 'query-user',
+            'total_storage_used': 0,
+            'original_storage_used': 0,
+            'storage_savings': 0,
+            'savings_percentage': 0.0,
+        }
+
+    def test_storage_stats_are_user_scoped_and_reflect_dedup_savings(self):
+        original = self.create_file(filename='original.pdf', file_type='application/pdf', size=100)
+        self.create_file(
+            filename='duplicate.pdf',
+            file_type='application/pdf',
+            size=100,
+            file_hash=original.file_hash,
+            is_reference=True,
+            original_file=original,
+        )
+        self.create_file(user_id='other-user', filename='other.bin', size=1000)
+
+        response = self.storage_stats()
+
+        assert response.status_code == 200
+        assert response.json() == {
+            'user_id': 'query-user',
+            'total_storage_used': 100,
+            'original_storage_used': 200,
+            'storage_savings': 100,
+            'savings_percentage': 50.0,
+        }
+
+    def test_storage_stats_are_live_after_delete(self):
+        deleted = self.create_file(filename='deleted.txt', size=75)
+        self.create_file(filename='retained.txt', size=25)
+
+        File.objects.filter(pk=deleted.pk).delete()
+        response = self.storage_stats()
+
+        assert response.status_code == 200
+        assert response.json()['total_storage_used'] == 25
+        assert response.json()['original_storage_used'] == 25
+        assert response.json()['storage_savings'] == 0
+        assert response.json()['savings_percentage'] == 0.0
+
+    def test_file_types_returns_sorted_distinct_user_scoped_mime_types(self):
+        self.create_file(filename='z.pdf', file_type='application/pdf')
+        self.create_file(filename='a.txt', file_type='text/plain')
+        self.create_file(filename='b.txt', file_type='text/plain')
+        self.create_file(user_id='other-user', filename='other.jpg', file_type='image/jpeg')
+
+        response = self.file_types()
+
+        assert response.status_code == 200
+        assert response.json() == ['application/pdf', 'text/plain']
+
+    def test_storage_stats_and_file_types_endpoints_match_prd_shapes(self):
+        self.create_file(filename='document.txt', file_type='text/plain', size=10)
+
+        stats_response = self.client.get('/api/files/storage_stats/', HTTP_USERID='query-user')
+        file_types_response = self.client.get('/api/files/file_types/', HTTP_USERID='query-user')
+
+        assert stats_response.status_code == 200
+        assert set(stats_response.json()) == {
+            'user_id',
+            'total_storage_used',
+            'original_storage_used',
+            'storage_savings',
+            'savings_percentage',
+        }
+        assert file_types_response.status_code == 200
+        assert file_types_response.json() == ['text/plain']

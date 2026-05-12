@@ -123,6 +123,14 @@ class FileViewSet(viewsets.ModelViewSet):
             DeduplicationService.delete_original_file(record)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    @action(detail=False, methods=['get'])
+    def storage_stats(self, request, *args, **kwargs):
+        return Response(FileQueryService.get_storage_stats(request.user_id))
+
+    @action(detail=False, methods=['get'])
+    def file_types(self, request, *args, **kwargs):
+        return Response(FileQueryService.get_file_types(request.user_id))
+
     @action(detail=True, methods=['get'])
     def download(self, request, *args, **kwargs):
         record = self.get_object()
