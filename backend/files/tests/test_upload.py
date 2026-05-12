@@ -88,14 +88,16 @@ class FileUploadTests(TestCase):
         assert payload['original_file'] is None
         assert payload['reference_count'] == 1
 
-    def test_upload_creates_database_record_and_writes_file_to_temp_media(self):
+    def test_upload_creates_database_record_and_writes_ciphertext_to_temp_media(self):
         response = self.upload_pdf()
 
         assert response.status_code == 201
         record = File.objects.get(id=response.json()['id'])
         saved_path = Path(record.file.path)
+        plaintext = (FIXTURES_DIR / 'sample.pdf').read_bytes()
+
         assert record.user_id == 'upload-user'
         assert record.file_type == 'application/pdf'
         assert saved_path.is_file()
         assert saved_path.is_relative_to(Path(self.media_dir.name))
-        assert saved_path.read_bytes() == (FIXTURES_DIR / 'sample.pdf').read_bytes()
+        assert saved_path.read_bytes() != plaintext
