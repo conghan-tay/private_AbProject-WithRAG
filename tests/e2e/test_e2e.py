@@ -101,6 +101,65 @@ def test_list_files_contains_uploaded_file_in_paginated_envelope(client: FileVau
     assert any(item["id"] == uploaded["id"] for item in payload["results"])
 
 
+def test_search_query_filters_files_by_filename(client: FileVaultClient) -> None:
+    unique = uuid4().hex
+    matching_name = f"incident-report-{unique}.txt"
+    other_name = f"notes-{unique}.txt"
+
+    matching_response = client.upload_bytes(matching_name, f"incident {unique}".encode())
+    assert matching_response.status_code == 201, matching_response.text
+    wait_for_rate_window()
+
+    other_response = client.upload_bytes(other_name, f"notes {unique}".encode())
+    assert other_response.status_code == 201, other_response.text
+    wait_for_rate_window()
+
+    response = client.list_files(params={"search": "incident-report"})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    result_names = {item["original_filename"] for item in payload["results"]}
+    assert payload["count"] == 1
+    assert matching_name in result_names
+    assert other_name not in result_names
+
+
+def test_multi_page_pagination_returns_next_and_previous_links(client: FileVaultClient) -> None:
+    unique = uuid4().hex
+    filenames = [f"page-{index}-{unique}.txt" for index in range(3)]
+    uploaded_ids: set[str] = set()
+
+    for index, filename in enumerate(filenames):
+        response = client.upload_bytes(filename, f"page payload {unique} {index}".encode())
+        assert response.status_code == 201, response.text
+        uploaded_ids.add(response.json()["id"])
+        wait_for_rate_window()
+
+    first_page = client.list_files(params={"page": 1, "page_size": 2})
+    assert first_page.status_code == 200, first_page.text
+    first_payload = first_page.json()
+    assert first_payload["count"] == 3
+    assert len(first_payload["results"]) == 2
+    assert first_payload["next"] is not None
+    assert first_payload["previous"] is None
+
+    wait_for_rate_window()
+    second_page = client.list_files(params={"page": 2, "page_size": 2})
+    assert second_page.status_code == 200, second_page.text
+    second_payload = second_page.json()
+    assert second_payload["count"] == 3
+    assert len(second_payload["results"]) == 1
+    assert second_payload["next"] is None
+    assert second_payload["previous"] is not None
+
+    returned_ids = {
+        item["id"]
+        for payload in (first_payload, second_payload)
+        for item in payload["results"]
+    }
+    assert returned_ids == uploaded_ids
+
+
 def test_download_returns_original_plaintext_bytes(client: FileVaultClient) -> None:
     uploaded = upload_pdf(client)
     wait_for_rate_window()
