@@ -6,6 +6,7 @@ from django.utils.http import content_disposition_header
 import magic
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
@@ -112,14 +113,31 @@ class FileViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(output_serializer.data)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
+    def destroy(self, request, *args, **kwargs):
+        record = self.get_object()
+        if record.is_reference:
+            DeduplicationService.delete_reference(record)
+        elif record.reference_count > 1:
+            DeduplicationService.promote_reference(record)
+        else:
+            DeduplicationService.delete_original_file(record)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     @action(detail=True, methods=['get'])
     def download(self, request, *args, **kwargs):
         record = self.get_object()
-        record.file.open('rb')
+        storage_record = record.original_file if record.is_reference else record
+        if storage_record is None or not storage_record.file:
+            raise NotFound()
+
+        storage_record.file.open('rb')
         try:
-            plaintext = EncryptionService.decrypt_file(record.file.read(), record.encryption_iv)
+            plaintext = EncryptionService.decrypt_file(
+                storage_record.file.read(),
+                storage_record.encryption_iv,
+            )
         finally:
-            record.file.close()
+            storage_record.file.close()
 
         response = StreamingHttpResponse(
             iter([plaintext]),
