@@ -15,6 +15,7 @@ from .serializers import FileSerializer
 from .services.dedup import DeduplicationService
 from .services.encryption import EncryptionService
 from .services.query import FileQueryService
+from .throttling import SlidingWindowThrottle
 
 
 MIME_SAMPLE_SIZE = 2048
@@ -43,6 +44,7 @@ class FileViewSet(viewsets.ModelViewSet):
     queryset = File.objects.all()
     serializer_class = FileSerializer
     pagination_class = FilePagination
+    throttle_classes = [SlidingWindowThrottle]
 
     def get_queryset(self):
         user_id = getattr(self.request, 'user_id', None)
