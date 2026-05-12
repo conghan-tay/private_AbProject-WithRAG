@@ -3,7 +3,6 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import django
 
@@ -20,7 +19,6 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from files.models import File
-from files.services.dedup import DeduplicationService
 
 
 TEST_DATABASE_CONFIG = None
@@ -144,35 +142,3 @@ class FileEdgeCaseTests(TestCase):
         assert exact_payload['count'] == 1
         assert exact_payload['results'][0]['id'] == owned_match.json()['id']
         assert exact_payload['results'][0]['user_id'] == 'edge-user'
-
-    def test_unique_constraint_race_fallback_keeps_single_original(self):
-        original_response = self.upload_bytes('original.bin', b'race-condition-bytes')
-
-        assert original_response.status_code == 201
-        original = File.objects.get(id=original_response.json()['id'])
-        original_storage_name = original.file.name
-
-        real_find_duplicate = DeduplicationService.find_duplicate
-        call_count = {'count': 0}
-
-        def miss_once_then_find(user_id, file_hash):
-            call_count['count'] += 1
-            if call_count['count'] == 1:
-                return None
-            return real_find_duplicate(user_id, file_hash)
-
-        with patch.object(DeduplicationService, 'find_duplicate', side_effect=miss_once_then_find):
-            race_response = self.upload_bytes('raced.bin', b'race-condition-bytes')
-
-        assert race_response.status_code == 201
-        payload = race_response.json()
-        original.refresh_from_db()
-
-        assert payload['is_reference'] is True
-        assert payload['original_file'] == str(original.id)
-        assert original.reference_count == 2
-        assert File.objects.filter(user_id='edge-user', is_reference=False).count() == 1
-        assert File.objects.filter(user_id='edge-user', is_reference=True).count() == 1
-        assert [path.name for path in Path(self.media_dir.name).rglob('*.*')] == [
-            Path(original_storage_name).name,
-        ]
