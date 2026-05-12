@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import django
+from django.db.models import Sum
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.test.utils import setup_databases, teardown_databases
@@ -35,6 +36,10 @@ def setup_module():
 def teardown_module():
     if TEST_DATABASE_CONFIG is not None:
         teardown_databases(TEST_DATABASE_CONFIG, verbosity=0)
+
+
+def response_body(response):
+    return b''.join(response.streaming_content)
 
 
 class DeduplicationServiceTests(TestCase):
@@ -188,3 +193,126 @@ class DeduplicatedUploadTests(TestCase):
         assert [path.name for path in Path(self.media_dir.name).rglob('*.*')] == [
             Path(original_storage_name).name,
         ]
+
+    def test_reference_download_uses_original_bytes_and_reference_filename(self):
+        plaintext = (FIXTURES_DIR / 'sample.pdf').read_bytes()
+        self.upload_pdf(filename='original.pdf')
+        duplicate_response = self.upload_pdf(filename='duplicate.pdf')
+        duplicate_id = duplicate_response.json()['id']
+
+        response = self.client.get(
+            reverse('file-download', kwargs={'pk': duplicate_id}),
+            HTTP_USERID='dedup-user',
+        )
+
+        assert response.status_code == 200
+        assert response_body(response) == plaintext
+        assert response['Content-Type'] == 'application/pdf'
+        assert response['Content-Disposition'] == 'attachment; filename="duplicate.pdf"'
+
+    def test_delete_reference_decrements_original_count_and_retains_physical_file(self):
+        original_response = self.upload_pdf(filename='original.pdf')
+        duplicate_response = self.upload_pdf(filename='duplicate.pdf')
+        original = File.objects.get(id=original_response.json()['id'])
+        duplicate_id = duplicate_response.json()['id']
+        saved_path = Path(original.file.path)
+
+        response = self.client.delete(
+            reverse('file-detail', kwargs={'pk': duplicate_id}),
+            HTTP_USERID='dedup-user',
+        )
+
+        assert response.status_code == 204
+        original.refresh_from_db()
+        assert original.reference_count == 1
+        assert not File.objects.filter(id=duplicate_id).exists()
+        assert saved_path.is_file()
+        assert len(list(Path(self.media_dir.name).rglob('*.*'))) == 1
+
+    def test_delete_original_with_references_promotes_oldest_reference(self):
+        plaintext = (FIXTURES_DIR / 'sample.pdf').read_bytes()
+        original_response = self.upload_pdf(filename='original.pdf')
+        first_ref_response = self.upload_pdf(filename='first-reference.pdf')
+        second_ref_response = self.upload_pdf(filename='second-reference.pdf')
+        original_id = original_response.json()['id']
+        first_ref_id = first_ref_response.json()['id']
+        second_ref_id = second_ref_response.json()['id']
+
+        original = File.objects.get(id=original_id)
+        original_storage_name = original.file.name
+        original_storage_path = Path(original.file.path)
+        original_iv = original.encryption_iv
+
+        response = self.client.delete(
+            reverse('file-detail', kwargs={'pk': original_id}),
+            HTTP_USERID='dedup-user',
+        )
+
+        assert response.status_code == 204
+        assert not File.objects.filter(id=original_id).exists()
+
+        promoted = File.objects.get(id=first_ref_id)
+        remaining_reference = File.objects.get(id=second_ref_id)
+        assert promoted.is_reference is False
+        assert promoted.original_file is None
+        assert promoted.reference_count == 2
+        assert promoted.file.name == original_storage_name
+        assert promoted.encryption_iv == original_iv
+        assert promoted.original_filename == 'first-reference.pdf'
+        assert remaining_reference.is_reference is True
+        assert remaining_reference.original_file == promoted
+        assert original_storage_path.is_file()
+        assert len(list(Path(self.media_dir.name).rglob('*.*'))) == 1
+
+        download_response = self.client.get(
+            reverse('file-download', kwargs={'pk': promoted.id}),
+            HTTP_USERID='dedup-user',
+        )
+        assert download_response.status_code == 200
+        assert response_body(download_response) == plaintext
+        assert download_response['Content-Disposition'] == (
+            'attachment; filename="first-reference.pdf"'
+        )
+
+        retrieve_deleted_response = self.client.get(
+            reverse('file-detail', kwargs={'pk': original_id}),
+            HTTP_USERID='dedup-user',
+        )
+        assert retrieve_deleted_response.status_code == 404
+
+    def test_delete_original_without_references_deletes_physical_file_and_frees_storage(self):
+        original_response = self.upload_pdf(filename='original.pdf')
+        original_id = original_response.json()['id']
+        original = File.objects.get(id=original_id)
+        saved_path = Path(original.file.path)
+
+        response = self.client.delete(
+            reverse('file-detail', kwargs={'pk': original_id}),
+            HTTP_USERID='dedup-user',
+        )
+
+        assert response.status_code == 204
+        assert not File.objects.filter(id=original_id).exists()
+        assert not saved_path.exists()
+        actual_storage_used = (
+            File.objects.filter(user_id='dedup-user', is_reference=False).aggregate(
+                total=Sum('size'),
+            )['total']
+            or 0
+        )
+        assert actual_storage_used == 0
+
+    def test_delete_for_another_user_returns_404_and_preserves_file(self):
+        original_response = self.upload_pdf(user_id='owner-user', filename='owner.pdf')
+        original_id = original_response.json()['id']
+        original = File.objects.get(id=original_id)
+        saved_path = Path(original.file.path)
+
+        response = self.client.delete(
+            reverse('file-detail', kwargs={'pk': original_id}),
+            HTTP_USERID='other-user',
+        )
+
+        assert response.status_code == 404
+        assert File.objects.filter(id=original_id).exists()
+        assert saved_path.is_file()
