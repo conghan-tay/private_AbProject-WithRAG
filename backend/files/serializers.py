@@ -5,7 +5,7 @@ from .models import File
 
 
 class FileSerializer(serializers.ModelSerializer):
-    file = serializers.FileField(write_only=True)
+    file = serializers.FileField(write_only=True, allow_empty_file=True)
 
     class Meta:
         model = File
