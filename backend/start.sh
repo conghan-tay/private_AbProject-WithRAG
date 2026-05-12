@@ -10,5 +10,6 @@ python manage.py makemigrations
 python manage.py migrate
 
 # Start server
-echo "Starting server..."
-gunicorn --bind 0.0.0.0:8000 core.wsgi:application 
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-1}"
+echo "Starting server with ${GUNICORN_WORKERS} Gunicorn worker(s)..."
+gunicorn --workers "${GUNICORN_WORKERS}" --bind 0.0.0.0:8000 core.wsgi:application
