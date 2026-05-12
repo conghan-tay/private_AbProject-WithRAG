@@ -1,14 +1,11 @@
+import io
 import os
 import sys
 import tempfile
 from pathlib import Path
 
 import django
-from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
-from django.test.utils import setup_databases, teardown_databases
-from django.urls import reverse
-from rest_framework.test import APIClient
+import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_DIR = BACKEND_DIR.parent
@@ -17,8 +14,14 @@ sys.path.insert(0, str(BACKEND_DIR))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 django.setup()
 
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, override_settings
+from django.test.utils import setup_databases, teardown_databases
+from django.urls import reverse
+from rest_framework.test import APIClient
+
 from files.models import File
-from files.services.encryption import AES_GCM_NONCE_BYTES, EncryptionService
+from files.services.encryption import AES_GCM_NONCE_BYTES, AES_GCM_TAG_BYTES, EncryptionService
 
 
 FIXTURES_DIR = REPO_DIR / 'tests' / 'fixtures'
@@ -39,23 +42,89 @@ def response_body(response):
     return b''.join(response.streaming_content)
 
 
+def decrypt_temp_file(encrypted_file, iv, original_size):
+    encrypted_file.seek(0)
+    return b''.join(
+        EncryptionService.decrypt_file_stream(
+            encrypted_file,
+            iv,
+            original_size,
+        )
+    )
+
+
+class ChunkOnlyUpload:
+    def __init__(self, chunks):
+        self._chunks = chunks
+        self.chunk_size_calls = []
+        self.seek_calls = []
+
+    def chunks(self, chunk_size=None):
+        self.chunk_size_calls.append(chunk_size)
+        yield from self._chunks
+
+    def read(self, *args, **kwargs):
+        raise AssertionError('chunked encryption must not call read()')
+
+    def seek(self, position):
+        self.seek_calls.append(position)
+
+
 class EncryptionServiceTests(TestCase):
-    def test_encrypt_file_returns_ciphertext_and_iv(self):
-        plaintext = b'file vault plaintext'
-        file_obj = SimpleUploadedFile('sample.txt', plaintext)
+    @override_settings(ENCRYPTION_CHUNK_SIZE_BYTES=5)
+    def test_chunked_encrypt_decrypt_round_trips_multiple_chunks(self):
+        plaintext_chunks = [b'abcde', b'fghij', b'kl']
+        file_obj = ChunkOnlyUpload(plaintext_chunks)
 
-        ciphertext, iv = EncryptionService.encrypt_file(file_obj)
+        encrypted_file, iv = EncryptionService.encrypt_file_to_temp(file_obj)
+        try:
+            encrypted_bytes = encrypted_file.read()
+            plaintext = b''.join(plaintext_chunks)
 
-        assert ciphertext != plaintext
-        assert len(iv) == AES_GCM_NONCE_BYTES
+            assert encrypted_bytes != plaintext
+            assert plaintext not in encrypted_bytes
+            assert len(iv) == AES_GCM_NONCE_BYTES
+            assert len(encrypted_bytes) == len(plaintext) + (3 * AES_GCM_TAG_BYTES)
+            assert decrypt_temp_file(encrypted_file, iv, len(plaintext)) == plaintext
+        finally:
+            encrypted_file.close()
 
-    def test_decrypt_file_round_trips_to_plaintext(self):
-        plaintext = b'round trip bytes'
-        file_obj = SimpleUploadedFile('sample.txt', plaintext)
+    def test_zero_byte_file_encrypts_to_non_empty_ciphertext(self):
+        file_obj = SimpleUploadedFile('empty.txt', b'')
 
-        ciphertext, iv = EncryptionService.encrypt_file(file_obj)
+        encrypted_file, iv = EncryptionService.encrypt_file_to_temp(file_obj)
+        try:
+            encrypted_bytes = encrypted_file.read()
 
-        assert EncryptionService.decrypt_file(ciphertext, iv) == plaintext
+            assert encrypted_bytes != b''
+            assert len(encrypted_bytes) == AES_GCM_TAG_BYTES
+            assert decrypt_temp_file(encrypted_file, iv, 0) == b''
+        finally:
+            encrypted_file.close()
+
+    @override_settings(ENCRYPTION_CHUNK_SIZE_BYTES=4)
+    def test_chunked_encryption_consumes_chunks_instead_of_full_read(self):
+        file_obj = ChunkOnlyUpload([b'abcd', b'ef'])
+
+        encrypted_file, _ = EncryptionService.encrypt_file_to_temp(file_obj)
+        encrypted_file.close()
+
+        assert file_obj.chunk_size_calls == [4]
+        assert file_obj.seek_calls == [0, 0]
+
+    @override_settings(ENCRYPTION_CHUNK_SIZE_BYTES=5)
+    def test_corrupted_encrypted_chunk_raises_decryption_error(self):
+        file_obj = ChunkOnlyUpload([b'abcde', b'f'])
+        encrypted_file, iv = EncryptionService.encrypt_file_to_temp(file_obj)
+        try:
+            encrypted_bytes = encrypted_file.read()
+        finally:
+            encrypted_file.close()
+
+        corrupted = encrypted_bytes[:-1]
+
+        with pytest.raises(Exception):
+            b''.join(EncryptionService.decrypt_file_stream(io.BytesIO(corrupted), iv, 6))
 
 
 class EncryptedUploadDownloadTests(TestCase):

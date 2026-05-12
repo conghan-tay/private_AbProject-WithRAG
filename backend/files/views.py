@@ -1,4 +1,4 @@
-from django.core.files.base import ContentFile
+from django.core.files.base import File as DjangoFile
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.http import StreamingHttpResponse
@@ -82,7 +82,7 @@ class FileViewSet(viewsets.ModelViewSet):
             return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 
         FileQueryService.check_quota(request.user_id, file_obj.size)
-        ciphertext, iv = EncryptionService.encrypt_file(file_obj)
+        encrypted_file, iv = EncryptionService.encrypt_file_to_temp(file_obj)
         record = File(
             user_id=request.user_id,
             original_filename=original_filename,
@@ -94,7 +94,10 @@ class FileViewSet(viewsets.ModelViewSet):
             reference_count=1,
             encryption_iv=iv,
         )
-        record.file.save(original_filename, ContentFile(ciphertext), save=False)
+        try:
+            record.file.save(original_filename, DjangoFile(encrypted_file), save=False)
+        finally:
+            encrypted_file.close()
 
         try:
             with transaction.atomic():
@@ -141,17 +144,19 @@ class FileViewSet(viewsets.ModelViewSet):
         if storage_record is None or not storage_record.file:
             raise NotFound()
 
-        storage_record.file.open('rb')
-        try:
-            plaintext = EncryptionService.decrypt_file(
-                storage_record.file.read(),
-                storage_record.encryption_iv,
-            )
-        finally:
-            storage_record.file.close()
+        def plaintext_chunks():
+            storage_record.file.open('rb')
+            try:
+                yield from EncryptionService.decrypt_file_stream(
+                    storage_record.file,
+                    storage_record.encryption_iv,
+                    storage_record.size,
+                )
+            finally:
+                storage_record.file.close()
 
         response = StreamingHttpResponse(
-            iter([plaintext]),
+            plaintext_chunks(),
             content_type=record.file_type,
         )
         response['Content-Disposition'] = content_disposition_header(
