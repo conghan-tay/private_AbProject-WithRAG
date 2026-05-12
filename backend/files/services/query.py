@@ -1,8 +1,15 @@
+from django.conf import settings
 from django.db.models import Sum
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 
 from files.filters import FileFilter
 from files.models import File
+
+
+class QuotaExceededException(APIException):
+    status_code = 429
+    default_detail = 'Storage Quota Exceeded'
+    default_code = 'storage_quota_exceeded'
 
 
 class FileQueryService:
@@ -17,6 +24,18 @@ class FileQueryService:
             raise ValidationError(file_filter.errors)
 
         return file_filter.qs
+
+    @staticmethod
+    def check_quota(user_id, new_size):
+        total_used = (
+            File.objects.filter(user_id=user_id, is_reference=False).aggregate(total=Sum('size'))[
+                'total'
+            ]
+            or 0
+        )
+
+        if total_used + new_size > settings.STORAGE_LIMIT_BYTES:
+            raise QuotaExceededException()
 
     @staticmethod
     def get_storage_stats(user_id):

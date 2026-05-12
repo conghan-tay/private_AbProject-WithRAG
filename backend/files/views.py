@@ -81,6 +81,7 @@ class FileViewSet(viewsets.ModelViewSet):
             output_serializer = self.get_serializer(reference)
             return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 
+        FileQueryService.check_quota(request.user_id, file_obj.size)
         ciphertext, iv = EncryptionService.encrypt_file(file_obj)
         record = File(
             user_id=request.user_id,
