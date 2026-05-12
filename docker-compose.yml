@@ -6,7 +6,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - backend_storage:/app/media
+      - ./uploaded_files:/app/media
       - backend_static:/app/staticfiles
       - backend_data:/app/data
     environment:
