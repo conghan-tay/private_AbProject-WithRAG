@@ -1,5 +1,6 @@
 import time
-from contextlib import contextmanager
+import uuid
+from functools import lru_cache
 
 from django.conf import settings
 from django.core.cache import cache
@@ -7,43 +8,77 @@ from rest_framework.exceptions import Throttled
 from rest_framework.throttling import BaseThrottle
 
 
+REDIS_SLIDING_WINDOW_SCRIPT = """
+local key = KEYS[1]
+local now_ms = tonumber(ARGV[1])
+local window_start_ms = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local member = ARGV[4]
+local ttl_seconds = tonumber(ARGV[5])
+
+redis.call("ZREMRANGEBYSCORE", key, 0, window_start_ms)
+
+local count = redis.call("ZCARD", key)
+if count >= limit then
+    redis.call("EXPIRE", key, ttl_seconds)
+    return 0
+end
+
+redis.call("ZADD", key, now_ms, member)
+redis.call("EXPIRE", key, ttl_seconds)
+return 1
+"""
+
+
+@lru_cache(maxsize=4)
+def get_redis_client(redis_url):
+    from redis import Redis
+
+    return Redis.from_url(redis_url)
+
+
 class SlidingWindowThrottle(BaseThrottle):
-    """Cache-backed per-user sliding-window request throttle."""
+    """Per-user sliding-window request throttle."""
 
     cache_key_prefix = 'ratelimit'
-    lock_key_prefix = 'ratelimit-lock'
     throttle_message = 'Call Limit Reached'
-    lock_timeout_seconds = 1
-    lock_wait_seconds = 0.25
-    lock_retry_sleep_seconds = 0.005
 
     def allow_request(self, request, view):
         user_id = getattr(request, 'user_id', None)
         if not user_id:
             return True
 
-        with self.user_lock(user_id):
-            return self.allow_request_for_user(user_id)
+        if settings.REDIS_URL:
+            return self.allow_redis_request(user_id)
 
-    @contextmanager
-    def user_lock(self, user_id):
-        lock_key = f'{self.lock_key_prefix}:{user_id}'
-        deadline = time.monotonic() + self.lock_wait_seconds
-        acquired = cache.add(lock_key, '1', timeout=self.lock_timeout_seconds)
+        return self.allow_cache_request(user_id)
 
-        while not acquired and time.monotonic() < deadline:
-            time.sleep(self.lock_retry_sleep_seconds)
-            acquired = cache.add(lock_key, '1', timeout=self.lock_timeout_seconds)
+    def allow_redis_request(self, user_id):
+        now_ms = int(time.time() * 1000)
+        period_ms = int(settings.RATE_LIMIT_PERIOD * 1000)
+        window_start_ms = now_ms - period_ms
+        ttl_seconds = max(1, int(settings.RATE_LIMIT_PERIOD * 2))
+        cache_key = f'{self.cache_key_prefix}:{user_id}'
+        member = f'{now_ms}:{uuid.uuid4().hex}'
 
-        if not acquired:
+        allowed = self.get_redis_client().eval(
+            REDIS_SLIDING_WINDOW_SCRIPT,
+            1,
+            cache_key,
+            now_ms,
+            window_start_ms,
+            settings.RATE_LIMIT_CALLS,
+            member,
+            ttl_seconds,
+        )
+        if int(allowed) != 1:
             raise Throttled(detail=self.throttle_message)
+        return True
 
-        try:
-            yield
-        finally:
-            cache.delete(lock_key)
+    def get_redis_client(self):
+        return get_redis_client(settings.REDIS_URL)
 
-    def allow_request_for_user(self, user_id):
+    def allow_cache_request(self, user_id):
         now = time.time()
         period = settings.RATE_LIMIT_PERIOD
         calls = settings.RATE_LIMIT_CALLS

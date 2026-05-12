@@ -139,9 +139,9 @@ FILE_UPLOAD_HANDLERS = [
     'django.core.files.uploadhandler.TemporaryFileUploadHandler',
 ]
 
-# Rate limiting uses Django's cache abstraction. Docker Compose sets REDIS_URL
-# so multiple Gunicorn workers share one cache-backed sliding window; local
-# Python runs without REDIS_URL fall back to per-process LocMemCache.
+# Docker Compose sets REDIS_URL for Redis-backed, multi-worker rate limiting.
+# SlidingWindowThrottle uses Redis directly for its atomic Lua/ZSET path and
+# falls back to this Django cache configuration when REDIS_URL is unset.
 REDIS_URL = os.environ.get('REDIS_URL')
 if REDIS_URL:
     CACHES = {
