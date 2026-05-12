@@ -85,8 +85,13 @@ def test_file_model_indexes_match_prd_contract():
     assert actual_indexes == expected_indexes
 
 
-def test_step_3_does_not_add_dedup_unique_constraint():
-    assert File._meta.constraints == []
+def test_file_model_has_step_7_dedup_unique_constraint_for_originals_only():
+    assert len(File._meta.constraints) == 1
+    constraint = File._meta.constraints[0]
+
+    assert constraint.name == 'files_file_unique_original_hash_per_user'
+    assert list(constraint.fields) == ['user_id', 'file_hash']
+    assert constraint.condition.children == [('is_reference', False)]
 
 
 def test_file_model_default_ordering_newest_first():

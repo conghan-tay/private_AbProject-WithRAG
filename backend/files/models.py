@@ -33,6 +33,13 @@ class File(models.Model):
 
     class Meta:
         ordering = ['-uploaded_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user_id', 'file_hash'],
+                condition=models.Q(is_reference=False),
+                name='files_file_unique_original_hash_per_user',
+            ),
+        ]
         indexes = [
             models.Index(fields=['user_id'], name='files_file_user_id'),
             models.Index(fields=['file_type'], name='files_file_file_type'),

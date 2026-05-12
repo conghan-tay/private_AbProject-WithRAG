@@ -111,6 +111,12 @@ source .venv/bin/activate
 python -m pytest tests/e2e -q
 ```
 
+Run a single E2E test by targeting its pytest node id:
+
+```bash
+python3 -m pytest tests/e2e/test_e2e.py::test_duplicate_upload_creates_reference_and_storage_savings -v
+```
+
 If you are already inside the `tests/` directory, run:
 
 ```bash
