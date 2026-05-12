@@ -1,6 +1,5 @@
-import hashlib
-
 from django.core.files.base import ContentFile
+from django.db import IntegrityError, transaction
 from django.http import StreamingHttpResponse
 from django.utils.http import content_disposition_header
 import magic
@@ -10,10 +9,10 @@ from rest_framework.response import Response
 
 from .models import File
 from .serializers import FileSerializer
+from .services.dedup import DeduplicationService
 from .services.encryption import EncryptionService
 
 
-HASH_CHUNK_SIZE = 8192
 MIME_SAMPLE_SIZE = 2048
 DEFAULT_MIME_TYPE = 'application/octet-stream'
 
@@ -21,15 +20,6 @@ DEFAULT_MIME_TYPE = 'application/octet-stream'
 def reset_file_pointer(file_obj):
     if hasattr(file_obj, 'seek'):
         file_obj.seek(0)
-
-
-def compute_file_hash(file_obj):
-    hasher = hashlib.sha256()
-    reset_file_pointer(file_obj)
-    for chunk in file_obj.chunks(chunk_size=HASH_CHUNK_SIZE):
-        hasher.update(chunk)
-    reset_file_pointer(file_obj)
-    return hasher.hexdigest()
 
 
 def detect_mime_type(file_obj):
@@ -56,11 +46,20 @@ class FileViewSet(viewsets.ModelViewSet):
         file_obj = serializer.validated_data['file']
         original_filename = file_obj.name
         file_type = detect_mime_type(file_obj)
-        file_hash = compute_file_hash(file_obj)
-        ciphertext, iv = EncryptionService.encrypt_file(file_obj)
+        file_hash = DeduplicationService.compute_hash(file_obj)
 
-        serializer.save(
-            file=ContentFile(ciphertext, name=original_filename),
+        duplicate = DeduplicationService.find_duplicate(request.user_id, file_hash)
+        if duplicate:
+            reference = DeduplicationService.create_reference(
+                request.user_id,
+                duplicate,
+                original_filename,
+            )
+            output_serializer = self.get_serializer(reference)
+            return Response(output_serializer.data, status=status.HTTP_201_CREATED)
+
+        ciphertext, iv = EncryptionService.encrypt_file(file_obj)
+        record = File(
             user_id=request.user_id,
             original_filename=original_filename,
             file_type=file_type,
@@ -71,9 +70,27 @@ class FileViewSet(viewsets.ModelViewSet):
             reference_count=1,
             encryption_iv=iv,
         )
+        record.file.save(original_filename, ContentFile(ciphertext), save=False)
 
-        headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        try:
+            with transaction.atomic():
+                record.save(force_insert=True)
+        except IntegrityError:
+            record.file.delete(save=False)
+            duplicate = DeduplicationService.find_duplicate(request.user_id, file_hash)
+            if not duplicate:
+                raise
+            reference = DeduplicationService.create_reference(
+                request.user_id,
+                duplicate,
+                original_filename,
+            )
+            output_serializer = self.get_serializer(reference)
+            return Response(output_serializer.data, status=status.HTTP_201_CREATED)
+
+        output_serializer = self.get_serializer(record)
+        headers = self.get_success_headers(output_serializer.data)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @action(detail=True, methods=['get'])
     def download(self, request, *args, **kwargs):
