@@ -1,20 +1,29 @@
 from django.core.files.base import ContentFile
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.http import StreamingHttpResponse
 from django.utils.http import content_disposition_header
 import magic
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from .models import File
 from .serializers import FileSerializer
 from .services.dedup import DeduplicationService
 from .services.encryption import EncryptionService
+from .services.query import FileQueryService
 
 
 MIME_SAMPLE_SIZE = 2048
 DEFAULT_MIME_TYPE = 'application/octet-stream'
+
+
+class FilePagination(PageNumberPagination):
+    page_size = settings.DEFAULT_PAGE_SIZE
+    page_size_query_param = 'page_size'
+    max_page_size = settings.MAX_PAGE_SIZE
 
 
 def reset_file_pointer(file_obj):
@@ -32,12 +41,23 @@ def detect_mime_type(file_obj):
 class FileViewSet(viewsets.ModelViewSet):
     queryset = File.objects.all()
     serializer_class = FileSerializer
+    pagination_class = FilePagination
 
     def get_queryset(self):
         user_id = getattr(self.request, 'user_id', None)
         if not user_id:
             return File.objects.none()
         return File.objects.filter(user_id=user_id)
+
+    def list(self, request, *args, **kwargs):
+        queryset = FileQueryService.build_queryset(request.user_id, request.query_params)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

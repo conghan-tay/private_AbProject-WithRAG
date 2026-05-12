@@ -129,6 +129,8 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 100
 FILE_UPLOAD_HANDLERS = [
     'django.core.files.uploadhandler.TemporaryFileUploadHandler',
 ]
