@@ -39,3 +39,19 @@ class FileSerializer(serializers.ModelSerializer):
         if value.size > settings.MAX_UPLOAD_SIZE_BYTES:
             raise serializers.ValidationError('File too large')
         return value
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        representation['file'] = self.get_file_url(instance)
+        return representation
+
+    @staticmethod
+    def get_file_url(instance):
+        storage_record = instance.original_file if instance.is_reference else instance
+        if storage_record is None or not storage_record.file:
+            return None
+
+        try:
+            return storage_record.file.url
+        except ValueError:
+            return None

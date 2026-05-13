@@ -67,6 +67,7 @@ class FileUploadTests(TestCase):
         payload = response.json()
         assert set(payload.keys()) == {
             'id',
+            'file',
             'user_id',
             'original_filename',
             'file_type',
@@ -77,9 +78,9 @@ class FileUploadTests(TestCase):
             'reference_count',
             'uploaded_at',
         }
-        assert 'file' not in payload
         assert payload['user_id'] == 'upload-user'
         assert payload['original_filename'] == 'sample.pdf'
+        assert payload['file'].startswith('/media/uploads/')
         assert payload['file_type'] == 'application/pdf'
         assert payload['size'] == len(pdf_bytes)
         assert payload['file_hash'] == hashlib.sha256(pdf_bytes).hexdigest()
@@ -101,3 +102,21 @@ class FileUploadTests(TestCase):
         assert saved_path.is_file()
         assert saved_path.is_relative_to(Path(self.media_dir.name))
         assert saved_path.read_bytes() != plaintext
+
+    def test_upload_list_and_detail_responses_include_file_url(self):
+        upload_response = self.upload_pdf()
+        assert upload_response.status_code == 201
+        upload_payload = upload_response.json()
+
+        list_response = self.client.get(reverse('file-list'), HTTP_USERID='upload-user')
+        detail_response = self.client.get(
+            reverse('file-detail', kwargs={'pk': upload_payload['id']}),
+            HTTP_USERID='upload-user',
+        )
+
+        assert list_response.status_code == 200
+        list_payload = list_response.json()
+        assert list_payload['results'][0]['file'] == upload_payload['file']
+
+        assert detail_response.status_code == 200
+        assert detail_response.json()['file'] == upload_payload['file']
