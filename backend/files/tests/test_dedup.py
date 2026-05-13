@@ -127,12 +127,14 @@ class DeduplicatedUploadTests(TestCase):
         assert original_payload['reference_count'] == 1
         assert duplicate_payload['is_reference'] is True
         assert duplicate_payload['original_file'] == original_payload['id']
+        assert duplicate_payload['file'] == original_payload['file']
         assert duplicate_payload['file_hash'] == original_payload['file_hash']
         assert duplicate_payload['size'] == original_payload['size']
         assert duplicate_payload['file_type'] == original_payload['file_type']
         assert duplicate_payload['original_filename'] == 'duplicate.pdf'
         assert third_payload['is_reference'] is True
         assert third_payload['original_file'] == original_payload['id']
+        assert third_payload['file'] == original_payload['file']
 
         original = File.objects.get(id=original_payload['id'])
         duplicate = File.objects.get(id=duplicate_payload['id'])

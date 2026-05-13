@@ -183,6 +183,7 @@ Returns a paginated envelope:
   "results": [
     {
       "id": "8f40cb41-6c8a-44d0-92c6-9eec4c7f89fd",
+      "file": "/media/uploads/4ed4d3c8-430b-4821-8dfd-b2f0db0ffad7.pdf",
       "user_id": "local-dev",
       "original_filename": "sample.pdf",
       "file_type": "application/pdf",
@@ -196,6 +197,8 @@ Returns a paginated envelope:
   ]
 }
 ```
+
+The `file` field is a metadata path for compatibility with the original API contract. Use the authenticated `/api/files/{id}/download/` endpoint to retrieve decrypted bytes.
 
 Supported query parameters:
 
@@ -243,6 +246,7 @@ Upload behavior:
 - Duplicate bytes for the same user create a reference row instead of writing another physical file.
 - Duplicate uploads bypass quota because they add no new bytes on disk.
 - Non-duplicate uploads are checked against `STORAGE_LIMIT_BYTES`, encrypted, and saved.
+- Successful responses return the same metadata fields shown by list/detail, including `file`. For duplicate references, `file` points to the original stored object path.
 
 ### Retrieve metadata
 
@@ -258,6 +262,8 @@ curl -H "UserId: local-dev" \
 ```
 
 Files are scoped to the requesting `UserId`. Requests for another user's file return `404`.
+
+Successful detail responses include the same metadata object shape as list results, including the `file` path.
 
 ### Download file
 
@@ -373,7 +379,7 @@ python -c "from cryptography.hazmat.primitives.ciphers.aead import AESGCM; impor
 
 - Deduplication is per-user. The same bytes uploaded by two different `UserId` values create separate originals to avoid cross-user information leakage.
 - The unique database constraint on `(user_id, file_hash)` for originals is the source of truth for same-user duplicate races.
-- References use `is_reference=True`, `original_file=<original id>`, and no physical file field.
+- References use `is_reference=True`, `original_file=<original id>`, and no physical file of their own; API responses resolve `file` to the original stored object path.
 - Storage quota tracks actual encrypted file ownership after deduplication. Reference uploads cost zero quota.
 - Search uses `django-filter` and ORM predicates, so query parameters are parameterized rather than hand-written SQL.
 - The rate limiter uses Redis sorted sets plus a Lua script when `REDIS_URL` is set, so pruning, counting, and admitting a request are atomic across Gunicorn workers.

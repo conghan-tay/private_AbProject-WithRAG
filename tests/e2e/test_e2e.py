@@ -58,6 +58,7 @@ def sample_pdf_path() -> Path:
 def assert_file_metadata_contract(payload: dict) -> None:
     expected_fields = {
         "id",
+        "file",
         "user_id",
         "original_filename",
         "file_type",
@@ -88,6 +89,7 @@ def test_upload_file_returns_final_metadata_contract(client: FileVaultClient) ->
     assert payload["is_reference"] is False
     assert payload["reference_count"] == 1
     assert len(payload["file_hash"]) == 64
+    assert payload["file"].startswith("/media/uploads/")
 
 
 def test_list_files_contains_uploaded_file_in_paginated_envelope(client: FileVaultClient) -> None:
@@ -99,7 +101,8 @@ def test_list_files_contains_uploaded_file_in_paginated_envelope(client: FileVau
     assert response.status_code == 200, response.text
     payload = response.json()
     assert {"count", "next", "previous", "results"}.issubset(payload.keys())
-    assert any(item["id"] == uploaded["id"] for item in payload["results"])
+    listed = next(item for item in payload["results"] if item["id"] == uploaded["id"])
+    assert listed["file"] == uploaded["file"]
 
 
 def test_search_query_filters_files_by_filename(client: FileVaultClient) -> None:
@@ -184,6 +187,7 @@ def test_duplicate_upload_creates_reference_and_storage_savings(client: FileVaul
     assert duplicate["file_hash"] == original["file_hash"]
     assert duplicate["is_reference"] is True
     assert duplicate["original_file"] == original["id"]
+    assert duplicate["file"] == original["file"]
 
     wait_for_rate_window()
     stats_response = client.storage_stats()
