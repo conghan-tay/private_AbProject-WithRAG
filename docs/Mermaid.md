@@ -4,11 +4,14 @@ graph TD
     Client([HTTP Client / E2E Tests]) -->|HTTP :8000| WSGI
 
 
-    subgraph Docker Container
+    subgraph Docker Compose
+    Redis[(Redis\nLua + sorted sets)]
+
+    subgraph Backend Container
         WSGI[Gunicorn / core/wsgi.py]
         WSGI --> MW[UserIdMiddleware\nExtract UserId header]
         MW -->|401/400| ClientErr1([Client Error])
-        MW --> Throttle[SlidingWindowThrottle\nCache-backed rate limit]
+        MW --> Throttle[SlidingWindowThrottle\nRedis Lua/ZSET or LocMem fallback]
         Throttle -->|429 Call Limit Reached| ClientErr2([Client Error])
         Throttle --> ViewSet[FileViewSet\nThin Orchestrator]
 
@@ -22,12 +25,15 @@ graph TD
         ES --> FS[/Docker Volume\n/app/media/]
         QS --> DB
         ViewSet --> DB
+        Throttle --> Redis
+    end
     end
 
 
     style DS fill:#D5E8F0,stroke:#2E75B6
     style ES fill:#D5E8F0,stroke:#2E75B6
     style QS fill:#D5E8F0,stroke:#2E75B6
+    style Redis fill:#F2F2F2,stroke:#888888
     style DB fill:#F2F2F2,stroke:#888888
     style FS fill:#F2F2F2,stroke:#888888
 ```
@@ -99,29 +105,30 @@ sequenceDiagram
 sequenceDiagram
     participant C as Client
     participant TH as SlidingWindowThrottle
-    participant Cache as Django Cache
+    participant Redis as Redis sorted set
 
 
     C->>TH: Request 1 (t=0.0s)
-    TH->>Cache: GET ratelimit:user123 → []
-    TH->>Cache: SET ratelimit:user123 → [0.0] (TTL=2s)
+    TH->>Redis: EVAL Lua: ZREMRANGEBYSCORE, ZCARD=0, ZADD 0.0, EXPIRE
+    Redis-->>TH: 1 (allowed)
     TH-->>C: pass → 200
 
 
     C->>TH: Request 2 (t=0.4s)
-    TH->>Cache: GET → [0.0]  prune → [0.0]  count=1 < 2
-    TH->>Cache: SET → [0.0, 0.4]
+    TH->>Redis: EVAL Lua: prune, ZCARD=1, ZADD 0.4, EXPIRE
+    Redis-->>TH: 1 (allowed)
     TH-->>C: pass → 200
 
 
     C->>TH: Request 3 (t=0.7s)
-    TH->>Cache: GET → [0.0, 0.4]  prune → [0.0, 0.4]  count=2 >= 2
+    TH->>Redis: EVAL Lua: prune, ZCARD=2 >= limit, do not ZADD
+    Redis-->>TH: 0 (denied)
     TH-->>C: 429 {detail: 'Call Limit Reached'}
 
 
     C->>TH: Request 4 (t=1.1s)
-    TH->>Cache: GET → [0.0, 0.4]  prune (drop <0.1s) → [0.4]  count=1 < 2
-    TH->>Cache: SET → [0.4, 1.1]
+    TH->>Redis: EVAL Lua: prune old scores, ZCARD=1, ZADD 1.1, EXPIRE
+    Redis-->>TH: 1 (allowed)
     TH-->>C: pass → 200
 ```
 

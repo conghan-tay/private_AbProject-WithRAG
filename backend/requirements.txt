@@ -29,7 +29,7 @@ django-filter==25.1           # pinned: 25.2 requires Python>=3.10 AND Django>=5
 # NICE (uncomment to enable)
 # ---------------------------------------------------------------------------
 # drf-spectacular==0.29.0
-# redis==7.4.0
+redis==7.4.0
 
 # ---------------------------------------------------------------------------
 # Transitive dependencies (pinned for full reproducibility)

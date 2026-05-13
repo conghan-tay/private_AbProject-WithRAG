@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
@@ -214,6 +215,19 @@ def test_rate_limit_returns_429_on_third_rapid_request(client: FileVaultClient) 
     assert second.status_code == 200, second.text
     assert third.status_code == 429
     assert third.json()["detail"] == "Call Limit Reached"
+
+
+def test_rate_limit_is_consistent_for_concurrent_requests_across_workers() -> None:
+    client = FileVaultClient(user_id=f"e2e-workers-{uuid4()}", timeout=10.0)
+
+    def request_status() -> int:
+        return client.list_files().status_code
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        statuses = list(executor.map(lambda _: request_status(), range(6)))
+
+    assert statuses.count(200) == 2
+    assert statuses.count(429) == 4
 
 
 def test_missing_user_id_returns_401() -> None:

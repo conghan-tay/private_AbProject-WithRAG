@@ -14,9 +14,10 @@ The project is intentionally packaged as a single-container backend for the take
 
 ## Architecture overview
 
-- **Runtime:** Django REST Framework behind Gunicorn on port `8000`.
+- **Runtime:** Django REST Framework behind Gunicorn on port `8000`; Docker Compose runs two workers by default.
 - **Identity:** API routes under `/api/` require a non-empty `UserId` header. Full user registration/authentication is intentionally out of scope.
 - **Persistence:** SQLite stores metadata in `/app/data/db.sqlite3`; Django `FileField` storage writes encrypted bytes to `/app/media`.
+- **Cache:** Docker Compose starts Redis and sets `REDIS_URL` so rate limits use an atomic Lua/ZSET sliding window across Gunicorn workers. Local Python runs without `REDIS_URL` use LocMemCache.
 - **Service layer:** `DeduplicationService`, `EncryptionService`, and `FileQueryService` own the business logic. Views orchestrate requests and responses.
 - **Encryption:** New physical files are encrypted with chunked AES-GCM before storage. Downloads decrypt through `StreamingHttpResponse`.
 - **Operational controls:** Rate limits, quotas, page sizes, and encryption chunk size are settings-driven.
@@ -65,6 +66,8 @@ Build and start the API:
 ```bash
 docker compose up --build
 ```
+
+Docker Compose starts the backend plus an internal Redis service. The backend uses `GUNICORN_WORKERS=2` and `REDIS_URL=redis://redis:6379/0` so sliding-window rate limits are process-global through Redis sorted sets and an atomic Lua script. Redis is not exposed on a host port.
 
 The API is available at:
 
@@ -349,6 +352,8 @@ The list is distinct, sorted, and scoped to the requesting `UserId`.
 | `DJANGO_SECRET_KEY` | `insecure-dev-only-key` in Docker Compose | Django secret key. Replace outside local development. |
 | `RATE_LIMIT_CALLS` | `2` | Max API calls per user per sliding window. |
 | `RATE_LIMIT_PERIOD` | `1` | Sliding-window size in seconds. |
+| `REDIS_URL` | set in Docker Compose | Enables the Redis Lua/ZSET rate limiter and Django's Redis cache backend. Unset uses LocMemCache fallback. |
+| `GUNICORN_WORKERS` | `2` in Docker Compose, `1` in `start.sh` | Gunicorn worker process count. |
 | `STORAGE_LIMIT_BYTES` | `10 * 1024 * 1024` | Per-user actual storage quota for physical originals. |
 | `MAX_UPLOAD_SIZE_BYTES` | `10 * 1024 * 1024` | Per-file upload limit. |
 | `ENCRYPTION_KEY` | unset in dev | Base64-url-safe encoded 32-byte AES key. Required when `DEBUG=False`. |
@@ -371,12 +376,12 @@ python -c "from cryptography.hazmat.primitives.ciphers.aead import AESGCM; impor
 - References use `is_reference=True`, `original_file=<original id>`, and no physical file field.
 - Storage quota tracks actual encrypted file ownership after deduplication. Reference uploads cost zero quota.
 - Search uses `django-filter` and ORM predicates, so query parameters are parameterized rather than hand-written SQL.
-- The rate limiter uses Django's cache abstraction with a sliding timestamp window. The default LocMemCache is per process; use Redis for global limits across multiple Gunicorn workers.
+- The rate limiter uses Redis sorted sets plus a Lua script when `REDIS_URL` is set, so pruning, counting, and admitting a request are atomic across Gunicorn workers.
+- To run without Redis in local Python, leave `REDIS_URL` unset; the throttle falls back to a Django LocMemCache timestamp list.
 - SQLite and Docker volumes are intentionally used for the challenge. The service boundaries support later swaps to PostgreSQL, Redis, and object storage.
 
 ## Project status
 
-- Steps 1-13 are implemented: setup, E2E client, data model, `UserId` middleware, upload, encryption, deduplication, filtering, delete cascade, storage stats, file types, throttling, quotas, and edge cases.
-- Step 14 is this README finalization.
+- Steps 1-15 are implemented: setup, E2E client, data model, `UserId` middleware, upload, encryption, deduplication, filtering, delete cascade, storage stats, file types, throttling, quotas, edge cases, README finalization, and Redis-backed multi-worker rate limiting.
 - Implemented extras include chunked AES-GCM encryption/streaming downloads and optional sanity E2E tests for the provided fixture files.
-- NICE follow-ups remain out of scope for this submission: Redis cache wiring, OpenAPI docs, and service container extraction.
+- NICE follow-ups remain out of scope for this submission: OpenAPI docs and service container extraction.

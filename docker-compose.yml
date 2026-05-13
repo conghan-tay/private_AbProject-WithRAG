@@ -1,4 +1,8 @@
 services:
+  redis:
+    image: redis:7.4-alpine
+    restart: always
+
   backend:
     build: 
       context: ./backend
@@ -12,6 +16,10 @@ services:
     environment:
       - DJANGO_DEBUG=True
       - DJANGO_SECRET_KEY=insecure-dev-only-key
+      - REDIS_URL=redis://redis:6379/0
+      - GUNICORN_WORKERS=2
+    depends_on:
+      - redis
     restart: always
 
 volumes:

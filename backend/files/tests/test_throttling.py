@@ -2,12 +2,15 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import django
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.test.utils import setup_databases, teardown_databases
 from django.urls import reverse
+from rest_framework.exceptions import Throttled
 from rest_framework.test import APIClient
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -15,6 +18,8 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 django.setup()
+
+from files.throttling import REDIS_SLIDING_WINDOW_SCRIPT, SlidingWindowThrottle
 
 
 TEST_DATABASE_CONFIG = None
@@ -92,3 +97,44 @@ class SlidingWindowThrottleTests(TestCase):
         assert first.json() == {'detail': 'UserId header required'}
         assert second.status_code == 401
         assert second.json() == {'detail': 'UserId header required'}
+
+    @override_settings(REDIS_URL='redis://redis:6379/0', RATE_LIMIT_CALLS=2, RATE_LIMIT_PERIOD=1)
+    def test_redis_script_returning_one_allows_request(self):
+        redis_client = MagicMock()
+        redis_client.eval.return_value = 1
+        throttle = SlidingWindowThrottle()
+        request = SimpleNamespace(user_id='redis-user')
+
+        with patch.object(throttle, 'get_redis_client', return_value=redis_client):
+            with patch('files.throttling.time.time', return_value=10.123):
+                with patch('files.throttling.uuid.uuid4', return_value=SimpleNamespace(hex='abc123')):
+                    allowed = throttle.allow_request(request, view=None)
+
+        assert allowed is True
+        redis_client.eval.assert_called_once_with(
+            REDIS_SLIDING_WINDOW_SCRIPT,
+            1,
+            'ratelimit:redis-user',
+            10123,
+            9123,
+            2,
+            '10123:abc123',
+            2,
+        )
+
+    @override_settings(REDIS_URL='redis://redis:6379/0', RATE_LIMIT_CALLS=2, RATE_LIMIT_PERIOD=1)
+    def test_redis_script_returning_zero_throttles_request(self):
+        redis_client = MagicMock()
+        redis_client.eval.return_value = 0
+        throttle = SlidingWindowThrottle()
+        request = SimpleNamespace(user_id='redis-user')
+
+        with patch.object(throttle, 'get_redis_client', return_value=redis_client):
+            with patch('files.throttling.time.time', return_value=10.123):
+                with patch('files.throttling.uuid.uuid4', return_value=SimpleNamespace(hex='abc123')):
+                    try:
+                        throttle.allow_request(request, view=None)
+                    except Throttled as exc:
+                        assert str(exc.detail) == 'Call Limit Reached'
+                    else:
+                        raise AssertionError('Expected Throttled to be raised')
