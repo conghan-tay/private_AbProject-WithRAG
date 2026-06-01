@@ -1,16 +1,5 @@
-import os
-import sys
-from pathlib import Path
-
-import django
 from django.db import models
 from django.db.models.deletion import SET_NULL
-
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(BACKEND_DIR))
-
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
-django.setup()
 
 from files.models import File
 

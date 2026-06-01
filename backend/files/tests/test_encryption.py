@@ -1,18 +1,8 @@
 import io
-import os
-import sys
 import tempfile
 from pathlib import Path
 
-import django
 import pytest
-
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-REPO_DIR = BACKEND_DIR.parent
-sys.path.insert(0, str(BACKEND_DIR))
-
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
-django.setup()
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -24,6 +14,8 @@ from files.models import File
 from files.services.encryption import AES_GCM_NONCE_BYTES, AES_GCM_TAG_BYTES, EncryptionService
 
 
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+REPO_DIR = BACKEND_DIR.parent
 FIXTURES_DIR = REPO_DIR / 'tests' / 'fixtures'
 TEST_DATABASE_CONFIG = None
 

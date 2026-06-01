@@ -51,7 +51,7 @@ class DeduplicationService:
     @staticmethod
     @transaction.atomic
     def delete_reference(reference):
-        reference = File.objects.select_related('original_file').select_for_update().get(
+        reference = File.objects.select_related('original_file').select_for_update(of=('self',)).get(
             pk=reference.pk,
         )
         original = reference.original_file

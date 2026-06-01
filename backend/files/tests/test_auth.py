@@ -1,17 +1,6 @@
-import os
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
-import django
 from django.test import RequestFactory
-
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(BACKEND_DIR))
-
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
-django.setup()
-
 from rest_framework.response import Response
 from rest_framework.test import APIClient
 
