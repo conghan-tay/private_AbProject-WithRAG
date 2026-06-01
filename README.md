@@ -16,7 +16,7 @@ The project is intentionally packaged as a single-container backend for the take
 
 - **Runtime:** Django REST Framework behind Gunicorn on port `8000`; Docker Compose runs two workers by default.
 - **Identity:** API routes under `/api/` require a non-empty `UserId` header. Full user registration/authentication is intentionally out of scope.
-- **Persistence:** SQLite stores metadata in `/app/data/db.sqlite3`; Django `FileField` storage writes encrypted bytes to `/app/media`.
+- **Persistence:** PostgreSQL 16 stores metadata; Django `FileField` storage writes encrypted bytes to `/app/media`. Docker Compose runs Postgres as a sibling service and the backend connects through `DATABASE_URL`.
 - **Cache:** Docker Compose starts Redis and sets `REDIS_URL` so rate limits use an atomic Lua/ZSET sliding window across Gunicorn workers. Local Python runs without `REDIS_URL` use LocMemCache.
 - **Service layer:** `DeduplicationService`, `EncryptionService`, and `FileQueryService` own the business logic. Views orchestrate requests and responses.
 - **Encryption:** New physical files are encrypted with chunked AES-GCM before storage. Downloads decrypt through `StreamingHttpResponse`.
@@ -59,6 +59,8 @@ When you open a new terminal, reactivate the environment before running Python c
 source .venv/bin/activate
 ```
 
+Running `manage.py` or the test suites outside Docker requires a reachable PostgreSQL instance. The settings.py default expects one at `postgres://filevault:filevault@localhost:5432/filevault`; set `DATABASE_URL` to override. For day-to-day development the easiest path is `docker compose up postgres` and point the local `DATABASE_URL` at `localhost:5432` after temporarily publishing the port if needed.
+
 ## Docker setup
 
 Build and start the API:
@@ -67,7 +69,7 @@ Build and start the API:
 docker compose up --build
 ```
 
-Docker Compose starts the backend plus an internal Redis service. The backend uses `GUNICORN_WORKERS=2` and `REDIS_URL=redis://redis:6379/0` so sliding-window rate limits are process-global through Redis sorted sets and an atomic Lua script. Redis is not exposed on a host port.
+Docker Compose starts the backend plus internal Redis and PostgreSQL services. The backend uses `GUNICORN_WORKERS=2` and `REDIS_URL=redis://redis:6379/0` so sliding-window rate limits are process-global through Redis sorted sets and an atomic Lua script, and connects to PostgreSQL through `DATABASE_URL=postgres://filevault:filevault@postgres:5432/filevault`. Neither Redis nor Postgres is exposed on a host port; `docker compose exec postgres psql -U filevault -d filevault` gives a shell when needed.
 
 The API is available at:
 
@@ -91,7 +93,7 @@ docker compose down
 
 ## Fresh data reset
 
-Docker Compose uses named volumes for SQLite data, encrypted media, and static files. Rebuilding the image does not erase those volumes.
+Docker Compose uses named volumes for PostgreSQL data (`postgres_data`), encrypted media (`backend_storage`), and static files (`backend_static`). Rebuilding the image does not erase those volumes.
 
 To wipe local API data and start from an empty database/media store:
 
@@ -100,7 +102,7 @@ docker compose down -v
 docker compose up --build
 ```
 
-The `-v` flag deletes named Docker volumes, including uploaded encrypted files. Use it only when you intentionally want a clean local state.
+The `-v` flag deletes named Docker volumes, including the Postgres data directory and uploaded encrypted files. Use it only when you intentionally want a clean local state.
 
 ## Common commands
 
@@ -358,6 +360,7 @@ The list is distinct, sorted, and scoped to the requesting `UserId`.
 | `DJANGO_SECRET_KEY` | `insecure-dev-only-key` in Docker Compose | Django secret key. Replace outside local development. |
 | `RATE_LIMIT_CALLS` | `2` | Max API calls per user per sliding window. |
 | `RATE_LIMIT_PERIOD` | `1` | Sliding-window size in seconds. |
+| `DATABASE_URL` | `postgres://filevault:filevault@postgres:5432/filevault` in Docker Compose | PostgreSQL connection string parsed by `dj-database-url`. The settings.py default points at `localhost:5432` so `manage.py` works against a local Postgres outside Docker. |
 | `REDIS_URL` | set in Docker Compose | Enables the Redis Lua/ZSET rate limiter and Django's Redis cache backend. Unset uses LocMemCache fallback. |
 | `GUNICORN_WORKERS` | `2` in Docker Compose, `1` in `start.sh` | Gunicorn worker process count. |
 | `STORAGE_LIMIT_BYTES` | `10 * 1024 * 1024` | Per-user actual storage quota for physical originals. |
@@ -384,10 +387,11 @@ python -c "from cryptography.hazmat.primitives.ciphers.aead import AESGCM; impor
 - Search uses `django-filter` and ORM predicates, so query parameters are parameterized rather than hand-written SQL.
 - The rate limiter uses Redis sorted sets plus a Lua script when `REDIS_URL` is set, so pruning, counting, and admitting a request are atomic across Gunicorn workers.
 - To run without Redis in local Python, leave `REDIS_URL` unset; the throttle falls back to a Django LocMemCache timestamp list.
-- SQLite and Docker volumes are intentionally used for the challenge. The service boundaries support later swaps to PostgreSQL, Redis, and object storage.
+- PostgreSQL 16 backs metadata via `dj-database-url` and `psycopg` v3; Redis backs the rate limiter; encrypted bytes live on a Docker volume. The remaining future swap is object storage for the media layer.
 
 ## Project status
 
 - Steps 1-15 are implemented: setup, E2E client, data model, `UserId` middleware, upload, encryption, deduplication, filtering, delete cascade, storage stats, file types, throttling, quotas, edge cases, README finalization, and Redis-backed multi-worker rate limiting.
+- Follow-up: PostgreSQL migration completed. The persistence layer now runs on PostgreSQL 16 via `psycopg` v3 and `dj-database-url`; SQLite has been removed.
 - Implemented extras include chunked AES-GCM encryption/streaming downloads and optional sanity E2E tests for the provided fixture files.
 - NICE follow-ups remain out of scope for this submission: OpenAPI docs and service container extraction.

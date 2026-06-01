@@ -6,3 +6,4 @@ output.txt
 __pycache__/
 *.py[cod]
 backend/data/
+*.sqlite3
