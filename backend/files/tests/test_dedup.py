@@ -1,11 +1,8 @@
 import hashlib
-import os
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import django
 from django.db.models import Sum
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -13,17 +10,12 @@ from django.test.utils import setup_databases, teardown_databases
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-REPO_DIR = BACKEND_DIR.parent
-sys.path.insert(0, str(BACKEND_DIR))
-
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
-django.setup()
-
 from files.models import File
 from files.services.dedup import DeduplicationService
 
 
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+REPO_DIR = BACKEND_DIR.parent
 FIXTURES_DIR = REPO_DIR / 'tests' / 'fixtures'
 TEST_DATABASE_CONFIG = None
 

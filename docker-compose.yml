@@ -3,8 +3,23 @@ services:
     image: redis:7.4-alpine
     restart: always
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: filevault
+      POSTGRES_USER: filevault
+      POSTGRES_PASSWORD: filevault
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U filevault -d filevault"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: always
+
   backend:
-    build: 
+    build:
       context: ./backend
       dockerfile: Dockerfile
     ports:
@@ -12,17 +27,20 @@ services:
     volumes:
       - backend_storage:/app/media
       - backend_static:/app/staticfiles
-      - backend_data:/app/data
     environment:
       - DJANGO_DEBUG=True
       - DJANGO_SECRET_KEY=insecure-dev-only-key
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgres://filevault:filevault@postgres:5432/filevault
       - GUNICORN_WORKERS=2
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     restart: always
 
 volumes:
   backend_storage:
   backend_static:
-  backend_data: 
+  postgres_data:

@@ -17,10 +17,10 @@ RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pyth
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p media staticfiles data
+RUN mkdir -p media staticfiles
 
 # Set permissions
-RUN chmod -R 777 data media staticfiles
+RUN chmod -R 777 media staticfiles
 
 # Collect static files
 RUN python manage.py collectstatic --noinput

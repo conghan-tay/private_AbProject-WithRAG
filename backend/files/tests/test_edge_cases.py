@@ -1,16 +1,6 @@
 import hashlib
-import os
-import sys
 import tempfile
 from pathlib import Path
-
-import django
-
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(BACKEND_DIR))
-
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
-django.setup()
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings

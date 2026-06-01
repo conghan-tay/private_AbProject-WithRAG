@@ -21,7 +21,7 @@ graph TD
         ViewSet --> QS[FileQueryService\nbuild_queryset / check_quota\nstorage_stats / file_types]
 
 
-        DS --> DB[(SQLite\n/app/data/db.sqlite3)]
+        DS --> DB[(PostgreSQL 16\nfilevault @ postgres:5432)]
         ES --> FS[/Docker Volume\n/app/media/]
         QS --> DB
         ViewSet --> DB

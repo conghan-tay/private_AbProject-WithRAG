@@ -1,23 +1,13 @@
-import os
-import sys
 import time
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import django
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.test.utils import setup_databases, teardown_databases
 from django.urls import reverse
 from rest_framework.exceptions import Throttled
 from rest_framework.test import APIClient
-
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(BACKEND_DIR))
-
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
-django.setup()
 
 from files.throttling import REDIS_SLIDING_WINDOW_SCRIPT, SlidingWindowThrottle
 

@@ -1,3 +1,15 @@
+import os
+import sys
+from pathlib import Path
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(BACKEND_DIR))
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
+
+import django
+
+django.setup()
+
 import pytest
 from django.core.cache import cache
 from django.test import override_settings

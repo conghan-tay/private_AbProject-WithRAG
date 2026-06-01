@@ -1,20 +1,10 @@
 import hashlib
-import os
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-import django
 from django.test import TestCase
 from django.test.utils import setup_databases, teardown_databases
 from django.urls import reverse
 from rest_framework.test import APIClient
-
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(BACKEND_DIR))
-
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
-django.setup()
 
 from files.models import File
 
