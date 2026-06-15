@@ -1,5 +1,9 @@
 # Ask the Vault — Session-Scoped RAG over Encrypted TXT Files
 
+> **Document relationship:** This v02 document supersedes
+> `AskTheVault_RAG_Session_Design.md` and is intended to be read independently. The v01
+> document is historical context only. Any implementation should follow v02.
+
 ## 1. Goal
 
 Add a natural-language Q&A capability on top of Abnormal File Vault. A user opens a
@@ -35,6 +39,18 @@ documents, chunks, embeddings, and Chroma collection are discarded.
 - **Answer LLM:** external streaming LLM API.
 - **State model:** `connected_no_documents -> ingesting -> ready -> answering -> disconnected`.
 - **No persistent RAG artifacts:** no chunk text, embeddings, or Chroma data on disk.
+
+### Why WebSocket
+
+One WebSocket equals one RAG session. The socket pins the session to one consumer
+instance in one ASGI worker, and that consumer owns the in-memory Chroma collection for
+the lifetime of the connection. Because both `select` and `ask` messages travel over the
+same connection, questions cannot accidentally route to another worker that does not hold
+the session index.
+
+The connection lifetime is also the cleanup boundary. Explicit close, tab close, network
+drop, and client crash all flow through the consumer disconnect path, where the Chroma
+collection is deleted and Python references are dropped.
 
 ### Security and Egress Note
 
@@ -186,6 +202,56 @@ connected_no_documents -> ingesting -> ready -> answering -> ready -> disconnect
 `select` is one-shot. The document set is immutable for the session.
 
 `ask` is single-turn. Conversation history is not threaded into later asks.
+
+### Lifecycle Flow
+
+```text
+connect
+  -> parse user_id from query string
+  -> validate non-empty user_id
+  -> accept socket
+  -> send status connected_no_documents
+
+receive select
+  -> state connected_no_documents -> ingesting
+  -> fetch owned File rows
+  -> skip missing/unowned/unsupported files
+  -> resolve references to storage originals
+  -> decrypt chunked AES-GCM streams
+  -> UTF-8 decode TXT
+  -> split, embed, and add chunks to Chroma EphemeralClient collection
+  -> send ready or no_documents
+  -> state ready
+
+receive ask
+  -> state ready -> answering
+  -> retrieve chunks from session collection
+  -> if top result exceeds RAG_MAX_DISTANCE, send no_answer
+  -> otherwise stream LLM tokens
+  -> send done with deterministic file-level sources
+  -> state ready
+
+disconnect
+  -> delete Chroma collection
+  -> drop client/vector store references
+  -> state disconnected
+```
+
+### Async/Sync Boundary
+
+Channels consumers run on an event loop shared by every connection in the worker. Any
+blocking operation must run off the event loop:
+
+- ORM reads use `database_sync_to_async` or a single sync ingest function wrapped with
+  `sync_to_async`.
+- Filesystem reads, chunked AES-GCM decryption, TXT decoding, chunking, embedding calls,
+  and Chroma writes run in a wrapped sync ingest unit.
+- Retrieval can also be wrapped if the Chroma/LangChain call blocks.
+- LLM streaming must bridge safely into async `self.send(...)` calls.
+
+The ingest path should be one coarse `sync_to_async` operation rather than many tiny
+threadpool hops, because fetch -> resolve -> decrypt -> decode -> split -> embed -> add is
+one logical load operation.
 
 ### Client to Server
 
@@ -415,6 +481,7 @@ RAG_CHUNK_SIZE = int(os.environ.get("RAG_CHUNK_SIZE", 1000))
 RAG_CHUNK_OVERLAP = int(os.environ.get("RAG_CHUNK_OVERLAP", 150))
 RAG_RETRIEVAL_K = int(os.environ.get("RAG_RETRIEVAL_K", 4))
 RAG_RETRIEVAL_FETCH_K = int(os.environ.get("RAG_RETRIEVAL_FETCH_K", 12))
+RAG_MAX_CONTEXT_CHUNKS = int(os.environ.get("RAG_MAX_CONTEXT_CHUNKS", 4))
 RAG_MAX_DISTANCE = float(os.environ.get("RAG_MAX_DISTANCE", 0.35))
 RAG_LLM_MODEL = os.environ.get("RAG_LLM_MODEL", "gpt-4.1-mini")
 ```
@@ -501,6 +568,9 @@ The LLM must not be called on `no_answer`.
 
 ### Prompt
 
+Before prompt assembly, cap retrieved context to `settings.RAG_MAX_CONTEXT_CHUNKS`. This
+keeps prompt size bounded even if retrieval settings are later widened.
+
 System prompt:
 
 ```text
@@ -556,13 +626,93 @@ No `done` is sent after failure.
 
 ---
 
-## 7. Test Strategy
+## 7. Sequence Diagrams
+
+### 7.1 Connect and Select
+
+```mermaid
+sequenceDiagram
+    participant C as WS Client
+    participant K as AskVaultConsumer
+    participant DB as PostgreSQL
+    participant FS as /app/media
+    participant E as EncryptionService
+    participant O as OpenAI Embeddings
+    participant X as Chroma EphemeralClient
+
+    C->>K: WS /ws/ask-vault/?user_id=user123
+    alt missing or blank user_id
+        K-->>C: close 4401 or 4400
+    else valid user_id
+        K-->>C: accept + status connected_no_documents
+    end
+
+    C->>K: select file_ids
+    K-->>C: status ingesting
+    Note over K,X: ingest block runs off the event loop
+    K->>DB: SELECT owned File rows by id and user_id
+    DB-->>K: owned records
+    loop each supported text/plain record
+        K->>K: resolve reference to original storage record
+        K->>FS: open encrypted file
+        K->>E: decrypt_file_stream(file, iv, size)
+        E-->>K: plaintext bytes
+        K->>K: UTF-8 decode and split
+        K->>O: embed chunk text
+        O-->>K: vectors
+        K->>X: add chunks + metadata
+    end
+    K-->>C: ready indexed_files + skipped_files
+```
+
+### 7.2 Ask and Stream
+
+```mermaid
+sequenceDiagram
+    participant C as WS Client
+    participant K as AskVaultConsumer
+    participant X as Chroma EphemeralClient
+    participant L as External LLM
+
+    C->>K: ask question
+    K->>X: retrieve relevant chunks from session collection
+    X-->>K: chunks + scores
+    alt top score beyond RAG_MAX_DISTANCE
+        K-->>C: no_answer not_in_documents
+    else relevant context found
+        K->>K: assemble strict-grounding prompt
+        K->>L: stream completion
+        loop each token
+            L-->>K: token
+            K-->>C: token
+        end
+        K-->>C: done sources
+    end
+```
+
+### 7.3 Disconnect Cleanup
+
+```mermaid
+sequenceDiagram
+    participant C as WS Client
+    participant K as AskVaultConsumer
+    participant X as Chroma EphemeralClient
+
+    C-->>K: disconnect, tab close, crash, or network drop
+    K->>X: delete_collection()
+    K->>K: drop vector_store and chroma_client references
+    Note over K,X: no disk artifacts exist because the collection was ephemeral
+```
+
+---
+
+## 8. Test Strategy
 
 Follow the same layered testing philosophy as the main File Vault implementation: write
 tests before implementation for each layer, and keep LLM/embedding calls mocked in the
 normal test suite.
 
-### 7.1 Test Layers
+### 8.1 Test Layers
 
 | Layer | Location | Tool | What it covers |
 |-------|----------|------|----------------|
@@ -572,7 +722,7 @@ normal test suite.
 | Ephemerality | `backend/files/tests/test_rag_chroma.py` | temp dirs + Chroma | No `persist_directory`, no local Chroma files, collection deleted on disconnect |
 | E2E smoke | `tests/e2e/test_rag_ws.py` | requests + websocket client | Upload TXT over REST, select over WS, ask, receive tokens and sources |
 
-### 7.2 Protocol and State Tests
+### 8.2 Protocol and State Tests
 
 - Connect without `user_id` closes with `4401`.
 - Connect with blank `user_id` closes with `4400`.
@@ -585,7 +735,7 @@ normal test suite.
 - `ask` while `answering` returns `busy`.
 - Successful answer returns state to `ready`.
 
-### 7.3 Ingest Tests
+### 8.3 Ingest Tests
 
 - Owned TXT file is decrypted, decoded, split, and indexed.
 - File owned by another user is skipped as `not_found_or_not_owned`.
@@ -596,7 +746,7 @@ normal test suite.
 - Promoted reference that became an original decrypts successfully.
 - If all requested files are skipped, server returns `no_documents`.
 
-### 7.4 Chroma and Embedding Tests
+### 8.4 Chroma and Embedding Tests
 
 - `chromadb.EphemeralClient()` is used.
 - No `persist_directory` is passed to LangChain `Chroma`.
@@ -607,7 +757,7 @@ normal test suite.
 - A fresh `EphemeralClient` cannot see old session collections.
 - OpenAI embedding object is configured with `text-embedding-3-small` and `1536`.
 
-### 7.5 Retrieval and LLM Tests
+### 8.5 Retrieval and LLM Tests
 
 - Score-direction test confirms whether lower or higher scores are better for the chosen
   Chroma/LangChain call.
@@ -617,8 +767,9 @@ normal test suite.
 - Token streaming emits one `token` message per generated token.
 - Successful stream terminates with `done`.
 - LLM error after partial tokens emits `llm_failed` and no `done`.
+- Prompt assembly uses no more than `RAG_MAX_CONTEXT_CHUNKS` chunks.
 
-### 7.6 E2E Smoke
+### 8.6 E2E Smoke
 
 Scenario:
 
@@ -636,7 +787,7 @@ suite is deterministic and does not spend API credits.
 
 ---
 
-## 8. TDD Build Plan
+## 9. TDD Build Plan
 
 Build in layers. Each step starts with focused failing tests, then the minimum
 implementation needed to pass them.
@@ -659,7 +810,7 @@ implementation needed to pass them.
 
 ---
 
-## 9. Known Deferred Work
+## 10. Known Deferred Work
 
 - Support PDF, DOCX, images, audio, and video extraction.
 - Add persistent/reusable embeddings for larger or repeated sessions.
@@ -671,7 +822,7 @@ implementation needed to pass them.
 
 ---
 
-## 10. Assumptions
+## 11. Assumptions
 
 - This is a local learning feature, not a production abuse-resistant deployment.
 - Users are expected to select TXT files, but the backend still enforces `text/plain`.
