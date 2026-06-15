@@ -239,19 +239,26 @@ disconnect
 
 ### Async/Sync Boundary
 
-Channels consumers run on an event loop shared by every connection in the worker. Any
-blocking operation must run off the event loop:
+Channels consumers run on a single event loop shared by every connection on the worker.
+An unwrapped blocking call freezes that loop and stalls *every* connection on the worker,
+not just the caller. So every line that touches the ORM, the filesystem, the encryption
+library, the embedding API, the retriever, or Chroma must run through `sync_to_async` /
+`database_sync_to_async`. The blocking still happens — it just happens on a threadpool
+thread, off the shared event loop.
 
-- ORM reads use `database_sync_to_async` or a single sync ingest function wrapped with
-  `sync_to_async`.
+- ORM reads use `database_sync_to_async`, or run inside the wrapped sync ingest function.
 - Filesystem reads, chunked AES-GCM decryption, TXT decoding, chunking, embedding calls,
-  and Chroma writes run in a wrapped sync ingest unit.
-- Retrieval can also be wrapped if the Chroma/LangChain call blocks.
-- LLM streaming must bridge safely into async `self.send(...)` calls.
+  and Chroma writes run inside that wrapped sync ingest unit.
+- Retrieval is wrapped the same way if the Chroma/LangChain call blocks.
+- LLM streaming must bridge the sync token iterator safely into async `self.send(...)`
+  calls (a sync-generator → async-iteration bridge if the client library is sync).
 
-The ingest path should be one coarse `sync_to_async` operation rather than many tiny
-threadpool hops, because fetch -> resolve -> decrypt -> decode -> split -> embed -> add is
-one logical load operation.
+The whole ingest is wrapped as **one** `sync_to_async` unit — one threadpool hop for the
+entire `fetch → resolve → decrypt → decode → split → embed → add` pipeline — rather than
+wrapping each call separately. It is logically one atomic "load these documents"
+operation, and one hop avoids paying the threadpool-handoff and event-loop-rescheduling
+cost between every stage. Per-call wrapping would also let an `ask` interleave between
+stages and observe a half-loaded index, which the one-hop wrap rules out by construction.
 
 ### Client to Server
 
