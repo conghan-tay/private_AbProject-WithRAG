@@ -802,7 +802,7 @@ implementation needed to pass them.
 | Step | Tag | What to Build | Tests First | Done When |
 |------|-----|---------------|-------------|-----------|
 | 1 | KEY | Protocol/state test skeleton | WS URL auth, close codes, JSON validation, state transition tests | Tests fail for missing consumer/routing |
-| 2 | KEY | ASGI/Channels skeleton | Same protocol/state tests | Minimal `AskVaultConsumer` accepts valid connections and passes state/protocol tests |
+| 2 | KEY | ASGI/Channels skeleton | Make Step 1 protocol/state tests pass | Minimal `AskVaultConsumer` accepts valid connections and passes state/protocol tests |
 | 3 | KEY | Runtime wiring | Compose/manual smoke for `rag_ws :8001` | `backend` serves REST on `8000`; `rag_ws` serves WS on `8001` |
 | 4 | KEY | Ingest unit tests | Owned lookup, cross-user skip, TXT-only skip, invalid UTF-8, reference storage resolution | Tests fail for missing ingest service |
 | 5 | KEY | TXT ingest implementation | Ingest tests from Step 4 | Owned TXT files decrypt, decode, split, and report `ready`/`skipped_files` correctly |
