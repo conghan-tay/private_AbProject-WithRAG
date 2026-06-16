@@ -249,7 +249,7 @@ def test_select_while_ready_returns_already_selected(monkeypatch):
     async_to_sync(assert_select_while_ready_returns_already_selected)(monkeypatch)
 
 
-async def assert_answering_rejects_concurrent_select_and_ask(monkeypatch):
+async def connect_answering_communicator(monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -265,24 +265,40 @@ async def assert_answering_rejects_concurrent_select_and_ask(monkeypatch):
     await communicator.send_json_to(ask_message())
     await asyncio.wait_for(started.wait(), timeout=1)
 
-    await communicator.send_json_to(select_message())
-    assert_error(await communicator.receive_json_from(), "already_selected")
+    return communicator, release
 
-    await communicator.send_json_to(ask_message("Second question?"))
-    assert_error(await communicator.receive_json_from(), "busy")
 
+async def finish_delayed_answer(communicator, release):
     release.set()
     assert await communicator.receive_json_from() == {"type": "token", "data": "answer"}
     assert await communicator.receive_json_from() == {"type": "done", "sources": []}
     await communicator.disconnect()
 
 
+async def assert_select_while_answering_returns_already_selected(monkeypatch):
+    communicator, release = await connect_answering_communicator(monkeypatch)
+
+    await communicator.send_json_to(select_message())
+    assert_error(await communicator.receive_json_from(), "already_selected")
+
+    await finish_delayed_answer(communicator, release)
+
+
 def test_select_while_answering_returns_already_selected(monkeypatch):
-    async_to_sync(assert_answering_rejects_concurrent_select_and_ask)(monkeypatch)
+    async_to_sync(assert_select_while_answering_returns_already_selected)(monkeypatch)
+
+
+async def assert_ask_while_answering_returns_busy(monkeypatch):
+    communicator, release = await connect_answering_communicator(monkeypatch)
+
+    await communicator.send_json_to(ask_message("Second question?"))
+    assert_error(await communicator.receive_json_from(), "busy")
+
+    await finish_delayed_answer(communicator, release)
 
 
 def test_ask_while_answering_returns_busy(monkeypatch):
-    async_to_sync(assert_answering_rejects_concurrent_select_and_ask)(monkeypatch)
+    async_to_sync(assert_ask_while_answering_returns_busy)(monkeypatch)
 
 
 async def assert_successful_answer_returns_state_to_ready(monkeypatch):
