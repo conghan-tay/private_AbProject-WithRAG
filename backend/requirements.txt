@@ -12,6 +12,11 @@
 Django==4.2.30
 djangorestframework==3.17.1
 gunicorn==26.0.0
+channels==4.3.2
+uvicorn==0.38.0
+# Test support only: channels.testing imports daphne.testing during collection.
+# The rag_ws runtime will use uvicorn, not Daphne.
+daphne==4.2.2
 python-dotenv==1.2.2
 whitenoise==6.12.0
 pathspec==0.11.2
