@@ -78,45 +78,20 @@ REST API:          http://localhost:8000
 Ask the Vault WS:  ws://localhost:8001/ws/ask-vault/?user_id=<user-id>
 ```
 
-Useful REST smoke check:
+Run the combined Docker runtime smoke check:
 
 ```bash
-curl -H "UserId: local-dev" http://localhost:8000/api/files/
+./scripts/smoke_docker_runtime.sh
 ```
 
-Useful WebSocket handshake smoke check:
-
-```bash
-python - <<'PY'
-import base64
-import os
-import socket
-
-key = base64.b64encode(os.urandom(16)).decode("ascii")
-request = (
-    "GET /ws/ask-vault/?user_id=local-dev HTTP/1.1\r\n"
-    "Host: localhost:8001\r\n"
-    "Upgrade: websocket\r\n"
-    "Connection: Upgrade\r\n"
-    f"Sec-WebSocket-Key: {key}\r\n"
-    "Sec-WebSocket-Version: 13\r\n"
-    "\r\n"
-)
-
-with socket.create_connection(("localhost", 8001), timeout=5) as sock:
-    sock.sendall(request.encode("ascii"))
-    print(sock.recv(4096).decode("latin1").split("\r\n\r\n", 1)[0])
-PY
-```
-
-The WebSocket smoke check should print an `HTTP/1.1 101 Switching Protocols` response. The current Ask the Vault runtime is still the Step 2 protocol/state skeleton; real RAG ingest, embeddings, retrieval, and LLM streaming are intentionally deferred.
+The smoke script starts Docker Compose, waits for REST on `8000`, verifies the WebSocket upgrade path on `8001`, checks missing WebSocket `user_id` rejection, and always tears down with `docker compose down -v`. The current Ask the Vault runtime is still the Step 2 protocol/state skeleton; real RAG ingest, embeddings, retrieval, and LLM streaming are intentionally deferred.
 
 Requests to `/api/` without `UserId` return `401`; empty or whitespace-only values return `400`. WebSocket sessions use `?user_id=<value>` because browser WebSocket clients cannot set custom upgrade headers.
 
 Stop the running container with `Ctrl+C`, or from another terminal:
 
 ```bash
-docker compose down
+docker compose down -v
 ```
 
 ## Fresh data reset
@@ -138,13 +113,13 @@ The `-v` flag deletes named Docker volumes, including the Postgres data director
 | --- | --- |
 | Install local dependencies | `python -m pip install -r backend/requirements.txt` |
 | Start or rebuild the API | `docker compose up --build` |
-| Stop containers | `docker compose down` |
+| Stop containers and remove volumes | `docker compose down -v` |
 | Reset local Docker data | `docker compose down -v` |
 | Run backend file tests | `.venv/bin/python -m pytest backend/files/tests -q` |
 | Run Ask the Vault protocol tests | `.venv/bin/python -m pytest backend/files/tests/test_rag_ws_protocol.py -q` |
 | Run E2E tests from repo root | `.venv/bin/python -m pytest tests/e2e -q` |
 | Run sanity E2E tests | `.venv/bin/python -m pytest tests/e2e/test_sanity_check_files.py -q` |
-| Smoke-test file list endpoint | `curl -H "UserId: local-dev" http://localhost:8000/api/files/` |
+| Smoke-test Docker runtimes | `./scripts/smoke_docker_runtime.sh` |
 
 ## Testing
 
