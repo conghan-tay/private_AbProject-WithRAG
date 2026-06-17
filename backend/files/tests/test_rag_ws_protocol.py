@@ -189,6 +189,38 @@ def test_ask_with_missing_question_before_select_returns_no_documents():
     async_to_sync(assert_protocol_error)({"action": "ask"}, "no_documents")
 
 
+async def assert_select_valid_file_ids_transitions_to_ready(monkeypatch):
+    async def instant_ingest(self, file_ids):
+        return {"indexed_files": len(file_ids), "skipped_files": []}
+
+    patch_consumer_hook(monkeypatch, "run_ingest", instant_ingest)
+    communicator, connected, _ = await connect_communicator()
+
+    assert connected is True
+    assert await communicator.receive_json_from() == {
+        "type": "status",
+        "state": "connected_no_documents",
+    }
+
+    await communicator.send_json_to(select_message())
+
+    assert await communicator.receive_json_from() == {
+        "type": "status",
+        "state": "ingesting",
+    }
+    assert await communicator.receive_json_from() == {
+        "type": "ready",
+        "indexed_files": 1,
+        "skipped_files": [],
+    }
+
+    await communicator.disconnect()
+
+
+def test_select_valid_file_ids_transitions_to_ready(monkeypatch):
+    async_to_sync(assert_select_valid_file_ids_transitions_to_ready)(monkeypatch)
+
+
 async def assert_select_while_ingesting_returns_already_selected(monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
