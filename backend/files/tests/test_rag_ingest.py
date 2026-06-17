@@ -1,6 +1,5 @@
 import hashlib
 import tempfile
-from pathlib import Path
 from uuid import uuid4
 
 from django.core.files.base import File as DjangoFile
@@ -25,7 +24,13 @@ def teardown_module():
         teardown_databases(TEST_DATABASE_CONFIG, verbosity=0)
 
 
-class FakeTextSplitter:
+def sorted_skips(skipped_files):
+    return sorted(skipped_files, key=lambda item: (item["file_id"], item["reason"]))
+
+
+class SplitTextOnlySplitter:
+    """Contract double: TxtIngestService should call split_text(text)."""
+
     def __init__(self):
         self.seen_texts = []
 
@@ -97,7 +102,7 @@ class TxtIngestServiceTests(TestCase):
             plaintext=b"alpha facts\n\nbeta facts",
             filename="case-notes.txt",
         )
-        splitter = FakeTextSplitter()
+        splitter = SplitTextOnlySplitter()
 
         result = self.service().ingest_files(
             user_id="rag-user",
@@ -125,7 +130,7 @@ class TxtIngestServiceTests(TestCase):
     def test_missing_and_cross_user_file_ids_are_skipped_without_existence_leak(self):
         other_record = self.create_encrypted_record(user_id="other-user")
         missing_id = uuid4()
-        splitter = FakeTextSplitter()
+        splitter = SplitTextOnlySplitter()
 
         result = self.service().ingest_files(
             user_id="rag-user",
@@ -135,10 +140,11 @@ class TxtIngestServiceTests(TestCase):
 
         assert result["indexed_files"] == 0
         assert result["chunks"] == []
-        assert result["skipped_files"] == [
+        expected_skips = [
             {"file_id": str(missing_id), "reason": "not_found_or_not_owned"},
             {"file_id": str(other_record.id), "reason": "not_found_or_not_owned"},
         ]
+        assert sorted_skips(result["skipped_files"]) == sorted_skips(expected_skips)
         assert splitter.seen_texts == []
 
     def test_owned_non_txt_file_is_skipped_as_unsupported_type(self):
@@ -151,7 +157,7 @@ class TxtIngestServiceTests(TestCase):
         result = self.service().ingest_files(
             user_id="rag-user",
             file_ids=[str(record.id)],
-            text_splitter=FakeTextSplitter(),
+            text_splitter=SplitTextOnlySplitter(),
         )
 
         assert result["indexed_files"] == 0
@@ -174,7 +180,7 @@ class TxtIngestServiceTests(TestCase):
         result = self.service().ingest_files(
             user_id="rag-user",
             file_ids=[str(record.id)],
-            text_splitter=FakeTextSplitter(),
+            text_splitter=SplitTextOnlySplitter(),
         )
 
         assert result["indexed_files"] == 0
@@ -197,7 +203,7 @@ class TxtIngestServiceTests(TestCase):
         result = self.service().ingest_files(
             user_id="rag-user",
             file_ids=[str(reference.id)],
-            text_splitter=FakeTextSplitter(),
+            text_splitter=SplitTextOnlySplitter(),
         )
 
         assert result["indexed_files"] == 1
@@ -233,7 +239,7 @@ class TxtIngestServiceTests(TestCase):
         result = self.service().ingest_files(
             user_id="rag-user",
             file_ids=[str(malformed.id)],
-            text_splitter=FakeTextSplitter(),
+            text_splitter=SplitTextOnlySplitter(),
         )
 
         assert result["indexed_files"] == 0
@@ -241,3 +247,75 @@ class TxtIngestServiceTests(TestCase):
         assert result["skipped_files"] == [
             {"file_id": str(malformed.id), "reason": "malformed_storage"}
         ]
+
+    def test_owned_original_with_missing_storage_file_is_skipped_as_malformed_storage(self):
+        malformed = File.objects.create(
+            user_id="rag-user",
+            file=None,
+            original_filename="missing-storage.txt",
+            file_type="text/plain",
+            size=10,
+            file_hash=hashlib.sha256(b"missing-storage").hexdigest(),
+            is_reference=False,
+            original_file=None,
+            reference_count=1,
+            encryption_iv=b"\x00" * 12,
+        )
+
+        result = self.service().ingest_files(
+            user_id="rag-user",
+            file_ids=[str(malformed.id)],
+            text_splitter=SplitTextOnlySplitter(),
+        )
+
+        assert result["indexed_files"] == 0
+        assert result["chunks"] == []
+        assert result["skipped_files"] == [
+            {"file_id": str(malformed.id), "reason": "malformed_storage"}
+        ]
+
+    def test_zero_byte_txt_decodes_but_is_skipped_because_it_has_no_chunks(self):
+        record = self.create_encrypted_record(
+            filename="empty.txt",
+            plaintext=b"",
+        )
+        splitter = SplitTextOnlySplitter()
+
+        result = self.service().ingest_files(
+            user_id="rag-user",
+            file_ids=[str(record.id)],
+            text_splitter=splitter,
+        )
+
+        assert result["indexed_files"] == 0
+        assert result["chunks"] == []
+        assert result["skipped_files"] == [
+            {"file_id": str(record.id), "reason": "no_chunks"}
+        ]
+        assert splitter.seen_texts == [""]
+
+    def test_duplicate_file_ids_are_processed_once(self):
+        record = self.create_encrypted_record(plaintext=b"deduplicated selection")
+        splitter = SplitTextOnlySplitter()
+
+        result = self.service().ingest_files(
+            user_id="rag-user",
+            file_ids=[str(record.id), str(record.id)],
+            text_splitter=splitter,
+        )
+
+        assert result["indexed_files"] == 1
+        assert result["skipped_files"] == []
+        assert [chunk["page_content"] for chunk in result["chunks"]] == [
+            "deduplicated selection"
+        ]
+        assert splitter.seen_texts == ["deduplicated selection"]
+
+    def test_empty_file_ids_returns_empty_result_envelope(self):
+        result = self.service().ingest_files(
+            user_id="rag-user",
+            file_ids=[],
+            text_splitter=SplitTextOnlySplitter(),
+        )
+
+        assert result == {"indexed_files": 0, "skipped_files": [], "chunks": []}
