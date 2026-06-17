@@ -15,6 +15,10 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
     STATE_DISCONNECTED = "disconnected"
 
     async def connect(self):
+        self.user_id = None
+        self.state = self.STATE_DISCONNECTED
+        self._tasks = set()
+
         query_params = parse_qs(
             self.scope.get("query_string", b"").decode("utf-8"),
             keep_blank_values=True,
@@ -32,19 +36,22 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
 
         self.user_id = user_id
         self.state = self.STATE_CONNECTED_NO_DOCUMENTS
-        self.background_task = None
 
         await self.accept()
         await self.send_json({"type": "status", "state": self.state})
 
     async def disconnect(self, close_code):
         self.state = self.STATE_DISCONNECTED
-        task = getattr(self, "background_task", None)
-        if task and not task.done():
-            task.cancel()
+        tasks = list(getattr(self, "_tasks", ()))
+
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        for task in tasks:
             try:
                 await task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -67,25 +74,20 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             await self.send_error("bad_request")
 
     async def handle_select(self, payload):
+        if self.state != self.STATE_CONNECTED_NO_DOCUMENTS:
+            await self.send_error("already_selected")
+            return
+
         file_ids = self.validate_file_ids(payload.get("file_ids"))
         if file_ids is None:
             await self.send_error("bad_request")
             return
 
-        if self.state != self.STATE_CONNECTED_NO_DOCUMENTS:
-            await self.send_error("already_selected")
-            return
-
         self.state = self.STATE_INGESTING
         await self.send_json({"type": "status", "state": self.state})
-        self.background_task = asyncio.create_task(self.complete_ingest(file_ids))
+        self._spawn(self.complete_ingest(file_ids))
 
     async def handle_ask(self, payload):
-        question = payload.get("question")
-        if not isinstance(question, str) or not question.strip():
-            await self.send_error("bad_request")
-            return
-
         if self.state == self.STATE_CONNECTED_NO_DOCUMENTS:
             await self.send_error("no_documents")
             return
@@ -96,8 +98,19 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             await self.send_error("busy")
             return
 
+        question = payload.get("question")
+        if not isinstance(question, str) or not question.strip():
+            await self.send_error("bad_request")
+            return
+
         self.state = self.STATE_ANSWERING
-        self.background_task = asyncio.create_task(self.complete_answer(question.strip()))
+        self._spawn(self.complete_answer(question.strip()))
+
+    def _spawn(self, coro):
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
 
     async def complete_ingest(self, file_ids):
         try:
