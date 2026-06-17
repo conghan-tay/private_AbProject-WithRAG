@@ -14,6 +14,7 @@ djangorestframework==3.17.1
 gunicorn==26.0.0
 channels==4.3.2
 uvicorn==0.38.0
+websockets==15.0.1
 # Test support only: channels.testing imports daphne.testing during collection.
 # The rag_ws runtime will use uvicorn, not Daphne.
 daphne==4.2.2

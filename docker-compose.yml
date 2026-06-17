@@ -40,6 +40,28 @@ services:
         condition: service_healthy
     restart: always
 
+  rag_ws:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn core.asgi:application --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    volumes:
+      - backend_storage:/app/media
+    environment:
+      - DJANGO_DEBUG=True
+      - DJANGO_SECRET_KEY=insecure-dev-only-key
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgres://filevault:filevault@postgres:5432/filevault
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: always
+
 volumes:
   backend_storage:
   backend_static:

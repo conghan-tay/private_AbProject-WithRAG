@@ -14,7 +14,7 @@ The project is intentionally packaged as a single-container backend for the take
 
 ## Architecture overview
 
-- **Runtime:** Django REST Framework behind Gunicorn on port `8000`; Docker Compose runs two workers by default.
+- **Runtime:** Django REST Framework behind Gunicorn on port `8000`; Docker Compose runs two REST workers by default. Ask the Vault uses a separate Uvicorn/ASGI service on port `8001` for WebSocket sessions.
 - **Identity:** API routes under `/api/` require a non-empty `UserId` header. Full user registration/authentication is intentionally out of scope.
 - **Persistence:** PostgreSQL 16 stores metadata; Django `FileField` storage writes encrypted bytes to `/app/media`. Docker Compose runs Postgres as a sibling service and the backend connects through `DATABASE_URL`.
 - **Cache:** Docker Compose starts Redis and sets `REDIS_URL` so rate limits use an atomic Lua/ZSET sliding window across Gunicorn workers. Local Python runs without `REDIS_URL` use LocMemCache.
@@ -63,27 +63,55 @@ Running `manage.py` or the test suites outside Docker requires a reachable Postg
 
 ## Docker setup
 
-Build and start the API:
+Build and start the API and Ask the Vault WebSocket runtime:
 
 ```bash
 docker compose up --build
 ```
 
-Docker Compose starts the backend plus internal Redis and PostgreSQL services. The backend uses `GUNICORN_WORKERS=2` and `REDIS_URL=redis://redis:6379/0` so sliding-window rate limits are process-global through Redis sorted sets and an atomic Lua script, and connects to PostgreSQL through `DATABASE_URL=postgres://filevault:filevault@postgres:5432/filevault`. Neither Redis nor Postgres is exposed on a host port; `docker compose exec postgres psql -U filevault -d filevault` gives a shell when needed.
+Docker Compose starts the REST backend, the Ask the Vault WebSocket service, and internal Redis and PostgreSQL services. The backend uses `GUNICORN_WORKERS=2` and `REDIS_URL=redis://redis:6379/0` so sliding-window rate limits are process-global through Redis sorted sets and an atomic Lua script, and connects to PostgreSQL through `DATABASE_URL=postgres://filevault:filevault@postgres:5432/filevault`. The `rag_ws` service uses the same backend image and codebase, starts `uvicorn core.asgi:application` on port `8001`, and shares the encrypted media volume. Neither Redis nor Postgres is exposed on a host port; `docker compose exec postgres psql -U filevault -d filevault` gives a shell when needed.
 
-The API is available at:
+The local runtime endpoints are:
 
 ```text
-http://localhost:8000
+REST API:          http://localhost:8000
+Ask the Vault WS:  ws://localhost:8001/ws/ask-vault/?user_id=<user-id>
 ```
 
-Useful smoke check:
+Useful REST smoke check:
 
 ```bash
 curl -H "UserId: local-dev" http://localhost:8000/api/files/
 ```
 
-Requests to `/api/` without `UserId` return `401`; empty or whitespace-only values return `400`.
+Useful WebSocket handshake smoke check:
+
+```bash
+python - <<'PY'
+import base64
+import os
+import socket
+
+key = base64.b64encode(os.urandom(16)).decode("ascii")
+request = (
+    "GET /ws/ask-vault/?user_id=local-dev HTTP/1.1\r\n"
+    "Host: localhost:8001\r\n"
+    "Upgrade: websocket\r\n"
+    "Connection: Upgrade\r\n"
+    f"Sec-WebSocket-Key: {key}\r\n"
+    "Sec-WebSocket-Version: 13\r\n"
+    "\r\n"
+)
+
+with socket.create_connection(("localhost", 8001), timeout=5) as sock:
+    sock.sendall(request.encode("ascii"))
+    print(sock.recv(4096).decode("latin1").split("\r\n\r\n", 1)[0])
+PY
+```
+
+The WebSocket smoke check should print an `HTTP/1.1 101 Switching Protocols` response. The current Ask the Vault runtime is still the Step 2 protocol/state skeleton; real RAG ingest, embeddings, retrieval, and LLM streaming are intentionally deferred.
+
+Requests to `/api/` without `UserId` return `401`; empty or whitespace-only values return `400`. WebSocket sessions use `?user_id=<value>` because browser WebSocket clients cannot set custom upgrade headers.
 
 Stop the running container with `Ctrl+C`, or from another terminal:
 
@@ -113,6 +141,7 @@ The `-v` flag deletes named Docker volumes, including the Postgres data director
 | Stop containers | `docker compose down` |
 | Reset local Docker data | `docker compose down -v` |
 | Run backend file tests | `.venv/bin/python -m pytest backend/files/tests -q` |
+| Run Ask the Vault protocol tests | `.venv/bin/python -m pytest backend/files/tests/test_rag_ws_protocol.py -q` |
 | Run E2E tests from repo root | `.venv/bin/python -m pytest tests/e2e -q` |
 | Run sanity E2E tests | `.venv/bin/python -m pytest tests/e2e/test_sanity_check_files.py -q` |
 | Smoke-test file list endpoint | `curl -H "UserId: local-dev" http://localhost:8000/api/files/` |
