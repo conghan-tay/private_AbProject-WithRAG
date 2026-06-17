@@ -103,6 +103,15 @@ async def assert_protocol_error(payload, expected_code):
     await communicator.disconnect()
 
 
+async def assert_ready_protocol_error(monkeypatch, payload, expected_code):
+    communicator = await connect_ready_communicator(monkeypatch)
+
+    await communicator.send_json_to(payload)
+
+    assert_error(await communicator.receive_json_from(), expected_code)
+    await communicator.disconnect()
+
+
 def test_missing_user_id_closes_with_4401():
     async_to_sync(assert_disconnects_with_code)(ASK_VAULT_PATH, 4401)
 
@@ -148,19 +157,25 @@ def test_select_with_invalid_uuid_file_id_returns_bad_request():
     )
 
 
-def test_ask_with_missing_question_returns_bad_request():
-    async_to_sync(assert_protocol_error)({"action": "ask"}, "bad_request")
+def test_ask_with_missing_question_returns_bad_request(monkeypatch):
+    async_to_sync(assert_ready_protocol_error)(
+        monkeypatch,
+        {"action": "ask"},
+        "bad_request",
+    )
 
 
-def test_ask_with_blank_question_returns_bad_request():
-    async_to_sync(assert_protocol_error)(
+def test_ask_with_blank_question_returns_bad_request(monkeypatch):
+    async_to_sync(assert_ready_protocol_error)(
+        monkeypatch,
         {"action": "ask", "question": "   "},
         "bad_request",
     )
 
 
-def test_ask_with_non_string_question_returns_bad_request():
-    async_to_sync(assert_protocol_error)(
+def test_ask_with_non_string_question_returns_bad_request(monkeypatch):
+    async_to_sync(assert_ready_protocol_error)(
+        monkeypatch,
         {"action": "ask", "question": ["not", "a", "string"]},
         "bad_request",
     )
@@ -168,6 +183,42 @@ def test_ask_with_non_string_question_returns_bad_request():
 
 def test_ask_before_select_returns_no_documents():
     async_to_sync(assert_protocol_error)(ask_message(), "no_documents")
+
+
+def test_ask_with_missing_question_before_select_returns_no_documents():
+    async_to_sync(assert_protocol_error)({"action": "ask"}, "no_documents")
+
+
+async def assert_select_valid_file_ids_transitions_to_ready(monkeypatch):
+    async def instant_ingest(self, file_ids):
+        return {"indexed_files": len(file_ids), "skipped_files": []}
+
+    patch_consumer_hook(monkeypatch, "run_ingest", instant_ingest)
+    communicator, connected, _ = await connect_communicator()
+
+    assert connected is True
+    assert await communicator.receive_json_from() == {
+        "type": "status",
+        "state": "connected_no_documents",
+    }
+
+    await communicator.send_json_to(select_message())
+
+    assert await communicator.receive_json_from() == {
+        "type": "status",
+        "state": "ingesting",
+    }
+    assert await communicator.receive_json_from() == {
+        "type": "ready",
+        "indexed_files": 1,
+        "skipped_files": [],
+    }
+
+    await communicator.disconnect()
+
+
+def test_select_valid_file_ids_transitions_to_ready(monkeypatch):
+    async_to_sync(assert_select_valid_file_ids_transitions_to_ready)(monkeypatch)
 
 
 async def assert_select_while_ingesting_returns_already_selected(monkeypatch):
@@ -201,6 +252,41 @@ async def assert_select_while_ingesting_returns_already_selected(monkeypatch):
 
 def test_select_while_ingesting_returns_already_selected(monkeypatch):
     async_to_sync(assert_select_while_ingesting_returns_already_selected)(monkeypatch)
+
+
+async def assert_invalid_select_while_ingesting_returns_already_selected(monkeypatch):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_ingest(self, file_ids):
+        started.set()
+        await release.wait()
+        return {"indexed_files": len(file_ids), "skipped_files": []}
+
+    patch_consumer_hook(monkeypatch, "run_ingest", delayed_ingest)
+    communicator, connected, _ = await connect_communicator()
+    assert connected is True
+    await communicator.receive_json_from()
+
+    await communicator.send_json_to(select_message())
+    assert await communicator.receive_json_from() == {
+        "type": "status",
+        "state": "ingesting",
+    }
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await communicator.send_json_to({"action": "select", "file_ids": ["not-a-uuid"]})
+    assert_error(await communicator.receive_json_from(), "already_selected")
+
+    release.set()
+    await communicator.receive_json_from()
+    await communicator.disconnect()
+
+
+def test_invalid_select_while_ingesting_returns_already_selected(monkeypatch):
+    async_to_sync(assert_invalid_select_while_ingesting_returns_already_selected)(
+        monkeypatch
+    )
 
 
 async def assert_ask_while_ingesting_returns_not_ready(monkeypatch):
@@ -301,6 +387,19 @@ def test_ask_while_answering_returns_busy(monkeypatch):
     async_to_sync(assert_ask_while_answering_returns_busy)(monkeypatch)
 
 
+async def assert_malformed_ask_while_answering_returns_busy(monkeypatch):
+    communicator, release = await connect_answering_communicator(monkeypatch)
+
+    await communicator.send_json_to({"action": "ask"})
+    assert_error(await communicator.receive_json_from(), "busy")
+
+    await finish_delayed_answer(communicator, release)
+
+
+def test_malformed_ask_while_answering_returns_busy(monkeypatch):
+    async_to_sync(assert_malformed_ask_while_answering_returns_busy)(monkeypatch)
+
+
 async def assert_successful_answer_returns_state_to_ready(monkeypatch):
     calls = []
 
@@ -326,3 +425,67 @@ async def assert_successful_answer_returns_state_to_ready(monkeypatch):
 
 def test_successful_answer_returns_state_to_ready(monkeypatch):
     async_to_sync(assert_successful_answer_returns_state_to_ready)(monkeypatch)
+
+
+async def assert_rejected_connect_initializes_cleanup_state(monkeypatch):
+    from files.consumers import AskVaultConsumer
+
+    observed_states = []
+    original_close = AskVaultConsumer.close
+
+    async def observing_close(self, *args, **kwargs):
+        observed_states.append(
+            {
+                "user_id": self.user_id,
+                "state": self.state,
+                "has_tasks": hasattr(self, "_tasks"),
+            }
+        )
+        await original_close(self, *args, **kwargs)
+
+    monkeypatch.setattr(AskVaultConsumer, "close", observing_close)
+
+    communicator, connected, detail = await connect_communicator(ASK_VAULT_PATH)
+
+    assert connected is False
+    assert detail == 4401
+    assert observed_states == [
+        {"user_id": None, "state": "disconnected", "has_tasks": True}
+    ]
+
+
+def test_rejected_connect_initializes_cleanup_state(monkeypatch):
+    async_to_sync(assert_rejected_connect_initializes_cleanup_state)(monkeypatch)
+
+
+async def assert_disconnect_cancels_background_tasks(monkeypatch):
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def long_ingest(self, file_ids):
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    patch_consumer_hook(monkeypatch, "run_ingest", long_ingest)
+    communicator, connected, _ = await connect_communicator()
+    assert connected is True
+    await communicator.receive_json_from()
+
+    await communicator.send_json_to(select_message())
+    assert await communicator.receive_json_from() == {
+        "type": "status",
+        "state": "ingesting",
+    }
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await communicator.disconnect()
+
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+
+def test_disconnect_cancels_background_tasks(monkeypatch):
+    async_to_sync(assert_disconnect_cancels_background_tasks)(monkeypatch)
