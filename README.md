@@ -122,6 +122,15 @@ The `-v` flag deletes named Docker volumes, including the Postgres data director
 Run the backend regression suite from the repository root:
 
 ```bash
+docker run --name filevault-postgres-local \
+  -e POSTGRES_DB=filevault \
+  -e POSTGRES_USER=filevault \
+  -e POSTGRES_PASSWORD=filevault \
+  -p 5432:5432 \
+  -d postgres:16-alpine
+```
+
+```bash
 .venv/bin/python -m pytest backend/files/tests -q
 ```
 
