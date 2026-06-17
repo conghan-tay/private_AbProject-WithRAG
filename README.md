@@ -14,7 +14,7 @@ The project is intentionally packaged as a single-container backend for the take
 
 ## Architecture overview
 
-- **Runtime:** Django REST Framework behind Gunicorn on port `8000`; Docker Compose runs two REST workers by default. Ask the Vault uses a separate Uvicorn/ASGI service on port `8001` for WebSocket sessions.
+- **Runtime:** Django REST Framework runs behind Gunicorn on port `8000` with two REST worker processes by default. Ask the Vault runs as a separate Uvicorn/ASGI service on port `8001` for WebSocket sessions.
 - **Identity:** API routes under `/api/` require a non-empty `UserId` header. Full user registration/authentication is intentionally out of scope.
 - **Persistence:** PostgreSQL 16 stores metadata; Django `FileField` storage writes encrypted bytes to `/app/media`. Docker Compose runs Postgres as a sibling service and the backend connects through `DATABASE_URL`.
 - **Cache:** Docker Compose starts Redis and sets `REDIS_URL` so rate limits use an atomic Lua/ZSET sliding window across Gunicorn workers. Local Python runs without `REDIS_URL` use LocMemCache.
