@@ -32,6 +32,7 @@ dj-database-url==2.3.0
 cryptography==46.0.6
 python-magic==0.4.27
 django-filter==25.1           # pinned: 25.2 requires Python>=3.10 AND Django>=5.2
+langchain-text-splitters==1.1.2
 
 # ---------------------------------------------------------------------------
 # NICE (uncomment to enable)

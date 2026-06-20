@@ -4,7 +4,10 @@ from json import JSONDecodeError
 from urllib.parse import parse_qs
 from uuid import UUID
 
+from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+
+from files.services.rag_ingest import TxtIngestService
 
 
 class AskVaultConsumer(AsyncWebsocketConsumer):
@@ -18,6 +21,7 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
         self.user_id = None
         self.state = self.STATE_DISCONNECTED
         self._tasks = set()
+        self.ingested_chunks = []
 
         query_params = parse_qs(
             self.scope.get("query_string", b"").decode("utf-8"),
@@ -142,7 +146,12 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             raise
 
     async def run_ingest(self, file_ids):
-        return {"indexed_files": 0, "skipped_files": []}
+        result = await sync_to_async(
+            TxtIngestService().ingest_files,
+            thread_sensitive=True,
+        )(self.user_id, file_ids)
+        self.ingested_chunks = result.get("chunks", [])
+        return result
 
     async def run_answer(self, question):
         yield {"type": "done", "sources": []}
