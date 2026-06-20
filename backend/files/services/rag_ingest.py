@@ -2,6 +2,7 @@ from cryptography.exceptions import InvalidTag
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
+from files import rag_protocol as protocol
 from files.models import File
 from files.services.encryption import EncryptionService
 
@@ -12,7 +13,11 @@ class TxtIngestService:
     def ingest_files(self, user_id, file_ids, text_splitter=None):
         ordered_file_ids = self._deduplicate_file_ids(file_ids)
         if not ordered_file_ids:
-            return {"indexed_files": 0, "skipped_files": [], "chunks": []}
+            return {
+                protocol.FIELD_INDEXED_FILES: 0,
+                protocol.FIELD_SKIPPED_FILES: [],
+                protocol.FIELD_CHUNKS: [],
+            }
 
         records_by_id = {
             str(record.id): record
@@ -31,16 +36,19 @@ class TxtIngestService:
             record = records_by_id.get(file_id)
             if record is None:
                 skipped_files.append(
-                    {"file_id": file_id, "reason": "not_found_or_not_owned"}
+                    {
+                        protocol.FIELD_FILE_ID: file_id,
+                        protocol.FIELD_REASON: protocol.SKIP_NOT_FOUND_OR_NOT_OWNED,
+                    }
                 )
                 continue
 
-            if record.file_type != "text/plain":
+            if record.file_type != protocol.SUPPORTED_TEXT_MIME_TYPE:
                 skipped_files.append(
                     {
-                        "file_id": file_id,
-                        "reason": "unsupported_type",
-                        "file_type": record.file_type,
+                        protocol.FIELD_FILE_ID: file_id,
+                        protocol.FIELD_REASON: protocol.SKIP_UNSUPPORTED_TYPE,
+                        protocol.FIELD_FILE_TYPE: record.file_type,
                     }
                 )
                 continue
@@ -48,7 +56,10 @@ class TxtIngestService:
             storage_record = record.original_file if record.is_reference else record
             if not self._has_usable_storage(storage_record):
                 skipped_files.append(
-                    {"file_id": file_id, "reason": "malformed_storage"}
+                    {
+                        protocol.FIELD_FILE_ID: file_id,
+                        protocol.FIELD_REASON: protocol.SKIP_MALFORMED_STORAGE,
+                    }
                 )
                 continue
 
@@ -56,7 +67,10 @@ class TxtIngestService:
                 plaintext = self._decrypt_storage_record(storage_record)
             except (OSError, ValueError, InvalidTag):
                 skipped_files.append(
-                    {"file_id": file_id, "reason": "malformed_storage"}
+                    {
+                        protocol.FIELD_FILE_ID: file_id,
+                        protocol.FIELD_REASON: protocol.SKIP_MALFORMED_STORAGE,
+                    }
                 )
                 continue
 
@@ -64,35 +78,43 @@ class TxtIngestService:
                 text = plaintext.decode("utf-8")
             except UnicodeDecodeError:
                 skipped_files.append(
-                    {"file_id": file_id, "reason": "unsupported_encoding"}
+                    {
+                        protocol.FIELD_FILE_ID: file_id,
+                        protocol.FIELD_REASON: protocol.SKIP_UNSUPPORTED_ENCODING,
+                    }
                 )
                 continue
 
             text_chunks = splitter.split_text(text)
             if not text_chunks:
-                skipped_files.append({"file_id": file_id, "reason": "no_chunks"})
+                skipped_files.append(
+                    {
+                        protocol.FIELD_FILE_ID: file_id,
+                        protocol.FIELD_REASON: protocol.SKIP_NO_CHUNKS,
+                    }
+                )
                 continue
 
             indexed_files += 1
             for chunk_index, page_content in enumerate(text_chunks):
                 chunks.append(
                     {
-                        "page_content": page_content,
-                        "metadata": {
-                            "user_id": user_id,
-                            "file_id": file_id,
-                            "storage_file_id": str(storage_record.id),
-                            "original_filename": record.original_filename,
-                            "file_type": record.file_type,
-                            "chunk_index": chunk_index,
+                        protocol.FIELD_PAGE_CONTENT: page_content,
+                        protocol.FIELD_METADATA: {
+                            protocol.FIELD_USER_ID: user_id,
+                            protocol.FIELD_FILE_ID: file_id,
+                            protocol.FIELD_STORAGE_FILE_ID: str(storage_record.id),
+                            protocol.FIELD_ORIGINAL_FILENAME: record.original_filename,
+                            protocol.FIELD_FILE_TYPE: record.file_type,
+                            protocol.FIELD_CHUNK_INDEX: chunk_index,
                         },
                     }
                 )
 
         return {
-            "indexed_files": indexed_files,
-            "skipped_files": skipped_files,
-            "chunks": chunks,
+            protocol.FIELD_INDEXED_FILES: indexed_files,
+            protocol.FIELD_SKIPPED_FILES: skipped_files,
+            protocol.FIELD_CHUNKS: chunks,
         }
 
     @staticmethod

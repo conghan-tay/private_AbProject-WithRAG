@@ -164,7 +164,7 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             TxtIngestService().ingest_files,
             thread_sensitive=True,
         )(self.user_id, file_ids)
-        self.ingested_chunks = result.get("chunks", [])
+        self.ingested_chunks = result.get(protocol.FIELD_CHUNKS, [])
         return result
 
     async def run_answer(self, question):
