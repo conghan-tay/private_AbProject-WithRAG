@@ -127,6 +127,39 @@ class TxtIngestServiceTests(TestCase):
         }
         assert result["chunks"][1]["metadata"]["chunk_index"] == 1
 
+    @override_settings(RAG_CHUNK_SIZE=40, RAG_CHUNK_OVERLAP=10)
+    def test_default_langchain_splitter_uses_rag_chunk_settings(self):
+        text = (
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet "
+            "kilo lima mike november oscar papa quebec romeo sierra tango"
+        )
+        record = self.create_encrypted_record(
+            plaintext=text.encode("utf-8"),
+            filename="long-notes.txt",
+        )
+
+        result = self.service().ingest_files(
+            user_id="rag-user",
+            file_ids=[str(record.id)],
+            text_splitter=None,
+        )
+
+        assert result["indexed_files"] == 1
+        assert result["skipped_files"] == []
+        assert len(result["chunks"]) > 1
+
+        for chunk_index, chunk in enumerate(result["chunks"]):
+            assert chunk["page_content"]
+            assert len(chunk["page_content"]) <= 40
+            assert chunk["metadata"] == {
+                "user_id": "rag-user",
+                "file_id": str(record.id),
+                "storage_file_id": str(record.id),
+                "original_filename": "long-notes.txt",
+                "file_type": "text/plain",
+                "chunk_index": chunk_index,
+            }
+
     def test_missing_and_cross_user_file_ids_are_skipped_without_existence_leak(self):
         other_record = self.create_encrypted_record(user_id="other-user")
         missing_id = uuid4()
