@@ -1,3 +1,4 @@
+from cryptography.exceptions import InvalidTag
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
@@ -53,7 +54,7 @@ class TxtIngestService:
 
             try:
                 plaintext = self._decrypt_storage_record(storage_record)
-            except (OSError, ValueError):
+            except (OSError, ValueError, InvalidTag):
                 skipped_files.append(
                     {"file_id": file_id, "reason": "malformed_storage"}
                 )

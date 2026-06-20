@@ -141,6 +141,11 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             )
         except asyncio.CancelledError:
             raise
+        except Exception:
+            if self.state != protocol.STATE_DISCONNECTED:
+                self.state = protocol.STATE_CONNECTED_NO_DOCUMENTS
+                self.ingested_chunks = []
+                await self.send_error(protocol.ERROR_NO_DOCUMENTS)
 
     async def complete_answer(self, question):
         try:

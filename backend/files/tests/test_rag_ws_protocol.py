@@ -418,6 +418,58 @@ def test_ask_while_ingesting_returns_not_ready(monkeypatch):
     async_to_sync(assert_ask_while_ingesting_returns_not_ready)(monkeypatch)
 
 
+async def assert_ingest_exception_resets_state_for_retry(monkeypatch):
+    calls = 0
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+
+    async def flaky_ingest(self, file_ids):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("simulated ingest failure")
+
+        second_started.set()
+        await release_second.wait()
+        return {
+            protocol.FIELD_INDEXED_FILES: len(file_ids),
+            protocol.FIELD_SKIPPED_FILES: [],
+        }
+
+    patch_consumer_hook(monkeypatch, "run_ingest", flaky_ingest)
+    communicator, connected, _ = await connect_communicator()
+    assert connected is True
+    await communicator.receive_json_from()
+
+    await communicator.send_json_to(select_message())
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_STATUS,
+        protocol.FIELD_STATE: protocol.STATE_INGESTING,
+    }
+    assert_error(await communicator.receive_json_from(), protocol.ERROR_NO_DOCUMENTS)
+
+    await communicator.send_json_to(select_message())
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_STATUS,
+        protocol.FIELD_STATE: protocol.STATE_INGESTING,
+    }
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+
+    release_second.set()
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_READY,
+        protocol.FIELD_INDEXED_FILES: 1,
+        protocol.FIELD_SKIPPED_FILES: [],
+    }
+    assert calls == 2
+
+    await communicator.disconnect()
+
+
+def test_ingest_exception_resets_state_for_retry(monkeypatch):
+    async_to_sync(assert_ingest_exception_resets_state_for_retry)(monkeypatch)
+
+
 async def assert_select_while_ready_returns_already_selected(monkeypatch):
     communicator = await connect_ready_communicator(monkeypatch)
 

@@ -222,6 +222,27 @@ class TxtIngestServiceTests(TestCase):
             {"file_id": str(record.id), "reason": "unsupported_encoding"}
         ]
 
+    def test_invalid_aes_gcm_tag_is_skipped_as_malformed_storage(self):
+        record = self.create_encrypted_record(
+            filename="corrupt.txt",
+            file_type="text/plain",
+            plaintext=b"valid utf8 but wrong iv",
+        )
+        record.encryption_iv = b"\x01" * 12
+        record.save(update_fields=["encryption_iv"])
+
+        result = self.service().ingest_files(
+            user_id="rag-user",
+            file_ids=[str(record.id)],
+            text_splitter=SplitTextOnlySplitter(),
+        )
+
+        assert result["indexed_files"] == 0
+        assert result["chunks"] == []
+        assert result["skipped_files"] == [
+            {"file_id": str(record.id), "reason": "malformed_storage"}
+        ]
+
     def test_reference_uses_original_storage_but_selected_reference_id_in_metadata(self):
         original = self.create_encrypted_record(
             plaintext=b"reference backed text",
