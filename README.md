@@ -365,6 +365,31 @@ Response:
 
 The list is distinct, sorted, and scoped to the requesting `UserId`.
 
+## Environment and secrets
+
+Runtime configuration is read from environment variables. For local development,
+Django also loads a repo-root `.env` file when present. Real shell, Docker, or
+platform environment variables take precedence over `.env` values.
+
+Recommended local setup:
+
+```bash
+cp .env.example .env
+```
+
+Do not commit `.env`, `.env.test`, or any other file containing real secrets.
+The committed `.env.example` contains only non-secret defaults and placeholders.
+
+Tests may use `.env.test` automatically when pytest imports Django settings, or
+an explicit alternate file can be selected with `ENV_FILE=.env.test`. Secret-backed
+integration tests are marked with `requires_openai`; they are skipped when
+`OPENAI_API_KEY` is missing or still looks like a placeholder.
+
+Docker Compose also reads `.env` for variable interpolation. In this project,
+`rag_ws` passes `OPENAI_API_KEY=${OPENAI_API_KEY:-}` through from the host or
+Compose `.env`; production deployments should inject secrets through the platform
+secret manager instead of baking them into images or source files.
+
 ## Configuration reference
 
 | Setting | Default | Purpose |
@@ -380,6 +405,11 @@ The list is distinct, sorted, and scoped to the requesting `UserId`.
 | `MAX_UPLOAD_SIZE_BYTES` | `10 * 1024 * 1024` | Per-file upload limit. |
 | `ENCRYPTION_KEY` | unset in dev | Base64-url-safe encoded 32-byte AES key. Required when `DEBUG=False`. |
 | `ENCRYPTION_CHUNK_SIZE_BYTES` | `1024 * 1024` | Plaintext chunk size for AES-GCM chunked encryption. |
+| `OPENAI_API_KEY` | unset | Required only for real Ask the Vault embedding/runtime calls. Missing values skip `requires_openai` tests. |
+| `RAG_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI embedding model for Ask the Vault indexing. |
+| `RAG_EMBEDDING_DIMENSIONS` | `1536` | Embedding dimensionality for the configured model. |
+| `RAG_CHUNK_SIZE` | `1000` | TXT chunk size for Ask the Vault ingest. |
+| `RAG_CHUNK_OVERLAP` | `150` | TXT chunk overlap for Ask the Vault ingest. |
 | `DEFAULT_PAGE_SIZE` | `20` | Default list pagination size. |
 | `MAX_PAGE_SIZE` | `100` | Maximum list pagination size. |
 
