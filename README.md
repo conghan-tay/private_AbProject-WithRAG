@@ -380,10 +380,11 @@ cp .env.example .env
 Do not commit `.env`, `.env.test`, or any other file containing real secrets.
 The committed `.env.example` contains only non-secret defaults and placeholders.
 
-Tests may use `.env.test` automatically when pytest imports Django settings, or
-an explicit alternate file can be selected with `ENV_FILE=.env.test`. Secret-backed
-integration tests are marked with `requires_openai`; they are skipped when
-`OPENAI_API_KEY` is missing or still looks like a placeholder.
+Backend pytest runs load `.env.test` before Django initializes and let `.env.test`
+override stale shell values for the test process. An explicit alternate test env
+file can be selected with `ENV_FILE=.env.test`. Secret-backed integration tests
+are marked with `requires_openai`; they are skipped when `OPENAI_API_KEY` is
+missing or still looks like a placeholder.
 
 Docker Compose also reads `.env` for variable interpolation. In this project,
 `rag_ws` passes `OPENAI_API_KEY=${OPENAI_API_KEY:-}` through from the host or

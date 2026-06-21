@@ -2,9 +2,18 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+REPO_ROOT = BACKEND_DIR.parent
 sys.path.insert(0, str(BACKEND_DIR))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
+
+load_dotenv(REPO_ROOT / ".env", override=False)
+test_env_file = Path(os.environ.get("ENV_FILE", ".env.test"))
+if not test_env_file.is_absolute():
+    test_env_file = REPO_ROOT / test_env_file
+load_dotenv(test_env_file, override=True)
 
 import django
 
