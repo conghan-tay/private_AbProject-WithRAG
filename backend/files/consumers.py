@@ -2,12 +2,13 @@ import asyncio
 import json
 from json import JSONDecodeError
 from urllib.parse import parse_qs
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from files import rag_protocol as protocol
+from files.services.rag_index import RagSessionIndex
 from files.services.rag_ingest import TxtIngestService
 
 
@@ -17,6 +18,8 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
         self.state = protocol.STATE_DISCONNECTED
         self._tasks = set()
         self.ingested_chunks = []
+        self.session_index = None
+        self.rag_session_id = uuid4().hex
 
         query_params = parse_qs(
             self.scope.get("query_string", b"").decode("utf-8"),
@@ -57,6 +60,8 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+
+        await self.cleanup_session_index()
 
     async def receive(self, text_data=None, bytes_data=None):
         try:
@@ -145,6 +150,7 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             if self.state != protocol.STATE_DISCONNECTED:
                 self.state = protocol.STATE_CONNECTED_NO_DOCUMENTS
                 self.ingested_chunks = []
+                await self.cleanup_session_index()
                 await self.send_error(protocol.ERROR_NO_DOCUMENTS)
 
     async def complete_answer(self, question):
@@ -160,12 +166,35 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             raise
 
     async def run_ingest(self, file_ids):
-        result = await sync_to_async(
-            TxtIngestService().ingest_files,
+        return await sync_to_async(
+            self._run_ingest_and_index,
             thread_sensitive=True,
-        )(self.user_id, file_ids)
-        self.ingested_chunks = result.get(protocol.FIELD_CHUNKS, [])
+        )(file_ids)
+
+    def _run_ingest_and_index(self, file_ids):
+        result = TxtIngestService().ingest_files(self.user_id, file_ids)
+        chunks = result.get(protocol.FIELD_CHUNKS, [])
+        self.ingested_chunks = chunks
+
+        if chunks:
+            self.session_index = RagSessionIndex(session_id=self.rag_session_id)
+            self.session_index.index_chunks(chunks)
+
         return result
+
+    async def cleanup_session_index(self):
+        session_index = getattr(self, "session_index", None)
+        self.session_index = None
+        if session_index is None:
+            return
+
+        try:
+            await sync_to_async(
+                session_index.cleanup,
+                thread_sensitive=True,
+            )()
+        except Exception:
+            pass
 
     async def run_answer(self, question):
         yield {
