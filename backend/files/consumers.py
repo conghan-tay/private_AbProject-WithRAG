@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from json import JSONDecodeError
 from urllib.parse import parse_qs
 from uuid import UUID, uuid4
@@ -10,6 +11,9 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from files import rag_protocol as protocol
 from files.services.rag_index import RagSessionIndex
 from files.services.rag_ingest import TxtIngestService
+
+
+logger = logging.getLogger(__name__)
 
 
 class AskVaultConsumer(AsyncWebsocketConsumer):
@@ -147,6 +151,10 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
         except asyncio.CancelledError:
             raise
         except Exception:
+            logger.exception(
+                "rag ingest/index failed for session %s",
+                self.rag_session_id,
+            )
             if self.state != protocol.STATE_DISCONNECTED:
                 self.state = protocol.STATE_CONNECTED_NO_DOCUMENTS
                 self.ingested_chunks = []
@@ -194,6 +202,10 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
                 thread_sensitive=True,
             )()
         except Exception:
+            logger.exception(
+                "rag session index cleanup failed for session %s",
+                self.rag_session_id,
+            )
             pass
 
     async def run_answer(self, question):

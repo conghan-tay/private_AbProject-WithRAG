@@ -30,10 +30,24 @@ def load_environment_files():
         load_dotenv(REPO_ROOT / env_file, override=False)
         return
 
-    if os.environ.get("PYTEST_CURRENT_TEST") or any(
-        "pytest" in Path(arg).name for arg in sys.argv
-    ):
+    if is_pytest_invocation():
         load_dotenv(REPO_ROOT / ".env.test", override=False)
+
+
+def is_pytest_invocation():
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    if "pytest" in sys.modules:
+        return True
+    if not sys.argv:
+        return False
+
+    try:
+        argv0 = Path(sys.argv[0]).resolve()
+    except OSError:
+        argv0 = Path(sys.argv[0])
+
+    return argv0.name == "pytest" or "pytest" in argv0.parts
 
 
 def env_bool(name, default):

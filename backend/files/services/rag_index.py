@@ -1,6 +1,11 @@
+import logging
+
 from django.conf import settings
 
 from files import rag_protocol as protocol
+
+
+logger = logging.getLogger(__name__)
 
 
 class RagSessionIndex:
@@ -50,6 +55,10 @@ class RagSessionIndex:
             if self.vector_store is not None:
                 self.vector_store.delete_collection()
         except Exception:
+            logger.exception(
+                "rag chroma collection cleanup failed for session %s",
+                self.session_id,
+            )
             pass
         finally:
             self.vector_store = None
