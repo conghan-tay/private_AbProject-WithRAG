@@ -2,9 +2,18 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+REPO_ROOT = BACKEND_DIR.parent
 sys.path.insert(0, str(BACKEND_DIR))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
+
+load_dotenv(REPO_ROOT / ".env", override=False)
+test_env_file = Path(os.environ.get("ENV_FILE", ".env.test"))
+if not test_env_file.is_absolute():
+    test_env_file = REPO_ROOT / test_env_file
+load_dotenv(test_env_file, override=True)
 
 import django
 
@@ -13,6 +22,33 @@ django.setup()
 import pytest
 from django.core.cache import cache
 from django.test import override_settings
+
+
+def has_openai_secret():
+    value = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not value:
+        return False
+
+    lowered = value.lower()
+    placeholder_fragments = (
+        "placeholder",
+        "replace",
+        "changeme",
+        "your-openai-api-key",
+        "sk-your",
+        "<openai",
+        "<your",
+    )
+    return not any(fragment in lowered for fragment in placeholder_fragments)
+
+
+def pytest_collection_modifyitems(config, items):
+    skip_openai = pytest.mark.skip(
+        reason="OPENAI_API_KEY is not configured for this integration test"
+    )
+    for item in items:
+        if "requires_openai" in item.keywords and not has_openai_secret():
+            item.add_marker(skip_openai)
 
 
 @pytest.fixture(autouse=True)

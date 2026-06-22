@@ -200,6 +200,7 @@ def test_session_index_cleanup_deletes_collection_and_drops_references(
     assert index.chroma_client is None
 
 
+@pytest.mark.requires_openai
 def test_ephemeral_index_writes_no_files_to_tmp(monkeypatch, tmp_path):
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.chdir(tmp_path)

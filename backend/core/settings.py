@@ -11,12 +11,79 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 
 import dj_database_url
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+REPO_ROOT = BASE_DIR.parent
+
+
+def load_environment_files():
+    load_dotenv(REPO_ROOT / ".env", override=False)
+
+    env_file = os.environ.get("ENV_FILE")
+    if env_file:
+        load_dotenv(REPO_ROOT / env_file, override=False)
+        return
+
+    if is_pytest_invocation():
+        load_dotenv(REPO_ROOT / ".env.test", override=False)
+
+
+def is_pytest_invocation():
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    if "pytest" in sys.modules:
+        return True
+    if not sys.argv:
+        return False
+
+    try:
+        argv0 = Path(sys.argv[0]).resolve()
+    except OSError:
+        argv0 = Path(sys.argv[0])
+
+    return argv0.name == "pytest" or "pytest" in argv0.parts
+
+
+def env_bool(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+def env_int(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+
+
+def env_float(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+
+
+load_environment_files()
 
 
 # Quick-start development settings - unsuitable for production
@@ -26,7 +93,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-default-key-for-development')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
+DEBUG = env_bool('DJANGO_DEBUG', True)
 
 ALLOWED_HOSTS = ['*']  # Configure appropriately in production
 
@@ -137,15 +204,19 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 # Media files
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
-STORAGE_LIMIT_BYTES = int(os.environ.get('STORAGE_LIMIT_BYTES', 10 * 1024 * 1024))
-ENCRYPTION_CHUNK_SIZE_BYTES = int(os.environ.get('ENCRYPTION_CHUNK_SIZE_BYTES', 1024 * 1024))
-RATE_LIMIT_CALLS = int(os.environ.get('RATE_LIMIT_CALLS', 2))
-RATE_LIMIT_PERIOD = float(os.environ.get('RATE_LIMIT_PERIOD', 1))
-RAG_CHUNK_SIZE = int(os.environ.get('RAG_CHUNK_SIZE', 1000))
-RAG_CHUNK_OVERLAP = int(os.environ.get('RAG_CHUNK_OVERLAP', 150))
-DEFAULT_PAGE_SIZE = 20
-MAX_PAGE_SIZE = 100
+MAX_UPLOAD_SIZE_BYTES = env_int('MAX_UPLOAD_SIZE_BYTES', 10 * 1024 * 1024)
+STORAGE_LIMIT_BYTES = env_int('STORAGE_LIMIT_BYTES', 10 * 1024 * 1024)
+ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')
+ENCRYPTION_CHUNK_SIZE_BYTES = env_int('ENCRYPTION_CHUNK_SIZE_BYTES', 1024 * 1024)
+RATE_LIMIT_CALLS = env_int('RATE_LIMIT_CALLS', 2)
+RATE_LIMIT_PERIOD = env_float('RATE_LIMIT_PERIOD', 1)
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+RAG_EMBEDDING_MODEL = os.environ.get('RAG_EMBEDDING_MODEL', 'text-embedding-3-small')
+RAG_EMBEDDING_DIMENSIONS = env_int('RAG_EMBEDDING_DIMENSIONS', 1536)
+RAG_CHUNK_SIZE = env_int('RAG_CHUNK_SIZE', 1000)
+RAG_CHUNK_OVERLAP = env_int('RAG_CHUNK_OVERLAP', 150)
+DEFAULT_PAGE_SIZE = env_int('DEFAULT_PAGE_SIZE', 20)
+MAX_PAGE_SIZE = env_int('MAX_PAGE_SIZE', 100)
 FILE_UPLOAD_HANDLERS = [
     'django.core.files.uploadhandler.TemporaryFileUploadHandler',
 ]
