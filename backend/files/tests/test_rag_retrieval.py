@@ -15,6 +15,7 @@ ASK_VAULT_PATH = "/ws/ask-vault/?user_id=rag-user"
 
 FILE_A = "11111111-1111-1111-1111-111111111111"
 FILE_B = "22222222-2222-2222-2222-222222222222"
+FILE_C = "33333333-3333-3333-3333-333333333333"
 
 
 class FakeEmbedding:
@@ -153,9 +154,10 @@ def test_retrieve_treats_chroma_scores_as_distances_and_accepts_low_score(
     vector_store = FakeChroma.instances[0]
     # The first retrieval pass must get a score so the code can apply the
     # no-answer threshold before asking the retriever for context documents.
-    assert vector_store.similarity_calls == [
-        {"query": "What indicators are present?"}
-    ]
+    assert len(vector_store.similarity_calls) == 1
+    threshold_call = vector_store.similarity_calls[0]
+    assert threshold_call["query"] == "What indicators are present?"
+    assert threshold_call.get("k", 1) == 1
     # If the threshold passes, the context retrieval must use MMR with the
     # configured k/fetch_k values to favor diverse chunks.
     assert vector_store.retriever_calls == [
@@ -197,7 +199,10 @@ def test_retrieve_returns_no_answer_when_top_distance_exceeds_threshold(
     result = index.retrieve("Unrelated question?")
 
     vector_store = FakeChroma.instances[0]
-    assert vector_store.similarity_calls == [{"query": "Unrelated question?"}]
+    assert len(vector_store.similarity_calls) == 1
+    threshold_call = vector_store.similarity_calls[0]
+    assert threshold_call["query"] == "Unrelated question?"
+    assert threshold_call.get("k", 1) == 1
     assert vector_store.retriever_calls == []
     assert result == {
         "answerable": False,
@@ -217,7 +222,7 @@ def test_retrieve_caps_context_docs_before_deriving_sorted_sources(monkeypatch):
     FakeChroma.similarity_results = [(doc("threshold result", FILE_A), 0.12)]
     first = doc("source b first", FILE_B, 0)
     second = doc("source a second", FILE_A, 0)
-    ignored = doc("source b ignored by context cap", FILE_B, 1)
+    ignored = doc("source c ignored by context cap", FILE_C, 0)
     FakeChroma.retriever_documents = [first, second, ignored]
 
     index = rag_index.RagSessionIndex(session_id="session-123")
@@ -229,6 +234,28 @@ def test_retrieve_caps_context_docs_before_deriving_sorted_sources(monkeypatch):
         "documents": [first, second],
         protocol.FIELD_SOURCES: [FILE_A, FILE_B],
     }
+
+
+@override_settings(
+    RAG_RETRIEVAL_K=4,
+    RAG_RETRIEVAL_FETCH_K=12,
+    RAG_MAX_CONTEXT_CHUNKS=4,
+    RAG_MAX_DISTANCE=0.35,
+)
+def test_retrieve_deduplicates_file_ids_across_chunks(monkeypatch):
+    rag_index = import_rag_index_with_fakes(monkeypatch)
+    FakeChroma.similarity_results = [(doc("alpha", FILE_A), 0.10)]
+    FakeChroma.retriever_documents = [
+        doc("alpha chunk 0", FILE_A, 0),
+        doc("alpha chunk 1", FILE_A, 1),
+        doc("beta chunk 0", FILE_B, 0),
+    ]
+
+    index = rag_index.RagSessionIndex(session_id="session-dup")
+
+    result = index.retrieve("alpha or beta?")
+
+    assert result[protocol.FIELD_SOURCES] == [FILE_A, FILE_B]
 
 
 class FakeSessionIndex:
@@ -246,9 +273,10 @@ class FakeSessionIndex:
 
 async def connect_ready_communicator(monkeypatch, retrieve_result):
     from files.consumers import AskVaultConsumer
+    fake_index = FakeSessionIndex(retrieve_result)
 
     async def instant_ingest(self, file_ids):
-        self.session_index = FakeSessionIndex(retrieve_result)
+        self.session_index = fake_index
         return {
             protocol.FIELD_INDEXED_FILES: len(file_ids),
             protocol.FIELD_SKIPPED_FILES: [],
@@ -279,7 +307,7 @@ async def connect_ready_communicator(monkeypatch, retrieve_result):
         protocol.FIELD_INDEXED_FILES: 1,
         protocol.FIELD_SKIPPED_FILES: [],
     }
-    return communicator
+    return communicator, fake_index
 
 
 async def assert_ws_no_answer_does_not_call_answer_generation(monkeypatch):
@@ -307,7 +335,7 @@ async def assert_ws_no_answer_does_not_call_answer_generation(monkeypatch):
         raising=False,
     )
 
-    communicator = await connect_ready_communicator(
+    communicator, fake_index = await connect_ready_communicator(
         monkeypatch,
         {
             "answerable": False,
@@ -327,6 +355,7 @@ async def assert_ws_no_answer_does_not_call_answer_generation(monkeypatch):
         protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_NO_ANSWER,
         protocol.FIELD_REASON: "not_in_documents",
     }
+    assert fake_index.questions == ["What is outside the documents?"]
     assert answer_generation_calls == []
     await communicator.disconnect()
 
@@ -336,7 +365,7 @@ def test_ws_no_answer_does_not_call_answer_generation(monkeypatch):
 
 
 async def assert_ws_relevant_answer_terminates_with_sorted_sources(monkeypatch):
-    communicator = await connect_ready_communicator(
+    communicator, fake_index = await connect_ready_communicator(
         monkeypatch,
         {
             "answerable": True,
@@ -356,6 +385,7 @@ async def assert_ws_relevant_answer_terminates_with_sorted_sources(monkeypatch):
         protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_DONE,
         protocol.FIELD_SOURCES: [FILE_A, FILE_B],
     }
+    assert fake_index.questions == ["What is in the selected files?"]
     await communicator.disconnect()
 
 
