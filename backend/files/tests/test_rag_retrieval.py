@@ -132,12 +132,17 @@ def test_rag_retrieval_settings_defaults_are_configured():
 def test_retrieve_treats_chroma_scores_as_distances_and_accepts_low_score(
     monkeypatch,
 ):
+    # Replace Chroma/OpenAI/LangChain imports with local fakes so this Step 8
+    # contract test never performs network calls or creates a real vector store.
     rag_index = import_rag_index_with_fakes(monkeypatch)
     threshold_doc = doc("alpha indicators", FILE_A)
     context_docs = [
         doc("beta context", FILE_B, 0),
         doc("alpha context", FILE_A, 0),
     ]
+
+    # Chroma returns cosine distance scores for the configured collection:
+    # lower is better, so 0.12 is accepted under RAG_MAX_DISTANCE=0.35.
     FakeChroma.similarity_results = [(threshold_doc, 0.12)]
     FakeChroma.retriever_documents = context_docs
 
@@ -146,9 +151,13 @@ def test_retrieve_treats_chroma_scores_as_distances_and_accepts_low_score(
     result = index.retrieve("What indicators are present?")
 
     vector_store = FakeChroma.instances[0]
+    # The first retrieval pass must get a score so the code can apply the
+    # no-answer threshold before asking the retriever for context documents.
     assert vector_store.similarity_calls == [
         {"query": "What indicators are present?"}
     ]
+    # If the threshold passes, the context retrieval must use MMR with the
+    # configured k/fetch_k values to favor diverse chunks.
     assert vector_store.retriever_calls == [
         {
             "search_type": "mmr",
@@ -159,6 +168,8 @@ def test_retrieve_treats_chroma_scores_as_distances_and_accepts_low_score(
         }
     ]
     assert vector_store.retriever.invocations == ["What indicators are present?"]
+    # Sources are deterministic file-level citations derived from retrieved
+    # metadata, not from future LLM output.
     assert result == {
         "answerable": True,
         "documents": context_docs,
