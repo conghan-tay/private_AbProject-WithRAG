@@ -353,7 +353,7 @@ async def assert_ws_no_answer_does_not_call_answer_generation(monkeypatch):
 
     assert await communicator.receive_json_from() == {
         protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_NO_ANSWER,
-        protocol.FIELD_REASON: "not_in_documents",
+        protocol.FIELD_REASON: protocol.REASON_NOT_IN_DOCUMENTS,
     }
     assert fake_index.questions == ["What is outside the documents?"]
     assert answer_generation_calls == []
@@ -393,3 +393,119 @@ def test_ws_relevant_answer_terminates_with_sorted_sources(monkeypatch):
     async_to_sync(assert_ws_relevant_answer_terminates_with_sorted_sources)(
         monkeypatch
     )
+
+
+async def assert_ws_retrieval_exception_resets_state_for_retry(monkeypatch):
+    from files.consumers import AskVaultConsumer
+
+    class FlakySessionIndex:
+        def __init__(self):
+            self.questions = []
+
+        def retrieve(self, question):
+            self.questions.append(question)
+            if len(self.questions) == 1:
+                raise RuntimeError("simulated retrieval failure")
+            return {
+                "answerable": True,
+                "documents": [doc("alpha", FILE_A)],
+                protocol.FIELD_SOURCES: [FILE_A],
+            }
+
+        def cleanup(self):
+            pass
+
+    fake_index = FlakySessionIndex()
+
+    async def instant_ingest(self, file_ids):
+        self.session_index = fake_index
+        return {
+            protocol.FIELD_INDEXED_FILES: len(file_ids),
+            protocol.FIELD_SKIPPED_FILES: [],
+        }
+
+    monkeypatch.setattr(AskVaultConsumer, "run_ingest", instant_ingest)
+
+    communicator = WebsocketCommunicator(application, ASK_VAULT_PATH)
+    connected, _ = await communicator.connect()
+    assert connected is True
+    await communicator.receive_json_from()
+
+    await communicator.send_json_to(
+        {
+            protocol.FIELD_ACTION: protocol.ACTION_SELECT,
+            protocol.FIELD_FILE_IDS: [FILE_A],
+        }
+    )
+    await communicator.receive_json_from()
+    await communicator.receive_json_from()
+
+    await communicator.send_json_to(
+        {
+            protocol.FIELD_ACTION: protocol.ACTION_ASK,
+            protocol.FIELD_QUESTION: "First question?",
+        }
+    )
+    assert await communicator.receive_nothing(timeout=0.05, interval=0.01)
+
+    await communicator.send_json_to(
+        {
+            protocol.FIELD_ACTION: protocol.ACTION_ASK,
+            protocol.FIELD_QUESTION: "Second question?",
+        }
+    )
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_DONE,
+        protocol.FIELD_SOURCES: [FILE_A],
+    }
+    assert fake_index.questions == ["First question?", "Second question?"]
+
+    await communicator.disconnect()
+
+
+def test_ws_retrieval_exception_resets_state_for_retry(monkeypatch):
+    async_to_sync(assert_ws_retrieval_exception_resets_state_for_retry)(monkeypatch)
+
+
+async def assert_ws_missing_session_index_returns_no_answer(monkeypatch):
+    from files.consumers import AskVaultConsumer
+
+    async def instant_ingest_without_index(self, file_ids):
+        self.session_index = None
+        return {
+            protocol.FIELD_INDEXED_FILES: len(file_ids),
+            protocol.FIELD_SKIPPED_FILES: [],
+        }
+
+    monkeypatch.setattr(AskVaultConsumer, "run_ingest", instant_ingest_without_index)
+
+    communicator = WebsocketCommunicator(application, ASK_VAULT_PATH)
+    connected, _ = await communicator.connect()
+    assert connected is True
+    await communicator.receive_json_from()
+
+    await communicator.send_json_to(
+        {
+            protocol.FIELD_ACTION: protocol.ACTION_SELECT,
+            protocol.FIELD_FILE_IDS: [FILE_A],
+        }
+    )
+    await communicator.receive_json_from()
+    await communicator.receive_json_from()
+
+    await communicator.send_json_to(
+        {
+            protocol.FIELD_ACTION: protocol.ACTION_ASK,
+            protocol.FIELD_QUESTION: "Anything?",
+        }
+    )
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_NO_ANSWER,
+        protocol.FIELD_REASON: protocol.REASON_NOT_IN_DOCUMENTS,
+    }
+
+    await communicator.disconnect()
+
+
+def test_ws_missing_session_index_returns_no_answer(monkeypatch):
+    async_to_sync(assert_ws_missing_session_index_returns_no_answer)(monkeypatch)
