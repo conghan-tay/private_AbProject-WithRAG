@@ -209,9 +209,29 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             pass
 
     async def run_answer(self, question):
+        result = await sync_to_async(
+            self.session_index.retrieve,
+            thread_sensitive=True,
+        )(question)
+
+        if not result["answerable"]:
+            yield {
+                protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_NO_ANSWER,
+                protocol.FIELD_REASON: "not_in_documents",
+            }
+            return
+
+        async for message in self.generate_answer_messages(
+            question,
+            result["documents"],
+            result[protocol.FIELD_SOURCES],
+        ):
+            yield message
+
+    async def generate_answer_messages(self, question, documents, sources):
         yield {
             protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_DONE,
-            protocol.FIELD_SOURCES: [],
+            protocol.FIELD_SOURCES: sources,
         }
 
     async def send_json(self, payload):

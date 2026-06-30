@@ -50,6 +50,43 @@ class RagSessionIndex:
         if documents:
             self.vector_store.add_documents(documents, ids=ids)
 
+    def retrieve(self, question):
+        scored_results = self.vector_store.similarity_search_with_score(
+            question,
+            k=1,
+        )
+        if not scored_results:
+            return self._retrieval_result(answerable=False, documents=[])
+
+        _, top_distance = scored_results[0]
+        if top_distance > settings.RAG_MAX_DISTANCE:
+            return self._retrieval_result(answerable=False, documents=[])
+
+        retriever = self.vector_store.as_retriever(
+            search_type="mmr",
+            search_kwargs={
+                "k": settings.RAG_RETRIEVAL_K,
+                "fetch_k": settings.RAG_RETRIEVAL_FETCH_K,
+            },
+        )
+        documents = retriever.invoke(question)[: settings.RAG_MAX_CONTEXT_CHUNKS]
+        return self._retrieval_result(answerable=True, documents=documents)
+
+    @staticmethod
+    def _retrieval_result(answerable, documents):
+        sources = sorted(
+            {
+                document.metadata[protocol.FIELD_FILE_ID]
+                for document in documents
+                if protocol.FIELD_FILE_ID in document.metadata
+            }
+        )
+        return {
+            "answerable": answerable,
+            "documents": documents,
+            protocol.FIELD_SOURCES: sources,
+        }
+
     def cleanup(self):
         try:
             if self.vector_store is not None:
