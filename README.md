@@ -84,7 +84,7 @@ Run the combined Docker runtime smoke check:
 ./scripts/smoke_docker_runtime.sh
 ```
 
-The smoke script starts Docker Compose, waits for REST on `8000`, verifies the WebSocket upgrade path on `8001`, checks missing WebSocket `user_id` rejection, and always tears down with `docker compose down -v`. The current Ask the Vault runtime is still the Step 2 protocol/state skeleton; real RAG ingest, embeddings, retrieval, and LLM streaming are intentionally deferred.
+The smoke script starts Docker Compose with deterministic fake Ask the Vault RAG enabled, waits for REST on `8000`, verifies the WebSocket upgrade path on `8001`, checks missing WebSocket `user_id` rejection, uploads a TXT file, selects it over the WebSocket, asks a question, and asserts streamed tokens plus terminal sources. It always tears down with `docker compose down -v`.
 
 Requests to `/api/` without `UserId` return `401`; empty or whitespace-only values return `400`. WebSocket sessions use `?user_id=<value>` because browser WebSocket clients cannot set custom upgrade headers.
 
@@ -118,6 +118,7 @@ The `-v` flag deletes named Docker volumes, including the Postgres data director
 | Run backend file tests | `.venv/bin/python -m pytest backend/files/tests -q` |
 | Run Ask the Vault protocol tests | `.venv/bin/python -m pytest backend/files/tests/test_rag_ws_protocol.py -q` |
 | Run E2E tests from repo root | `.venv/bin/python -m pytest tests/e2e -q` |
+| Run Ask the Vault Docker E2E directly | `RUN_ASKVAULT_RAG_E2E=1 .venv/bin/python -m pytest tests/e2e/test_rag_ws.py -q` |
 | Run sanity E2E tests | `.venv/bin/python -m pytest tests/e2e/test_sanity_check_files.py -q` |
 | Smoke-test Docker runtimes | `./scripts/smoke_docker_runtime.sh` |
 
@@ -391,6 +392,11 @@ Docker Compose also reads `.env` for variable interpolation. In this project,
 Compose `.env`; production deployments should inject secrets through the platform
 secret manager instead of baking them into images or source files.
 
+`ASKVAULT_RAG_E2E_FAKE=True` is a local Docker smoke-test switch only. It replaces
+OpenAI embeddings and LLM calls with deterministic local behavior inside `rag_ws`;
+settings refuse it when `DJANGO_DEBUG=False`. The focused RAG E2E test is skipped
+unless `RUN_ASKVAULT_RAG_E2E=1` is set.
+
 ## Configuration reference
 
 | Setting | Default | Purpose |
@@ -411,6 +417,8 @@ secret manager instead of baking them into images or source files.
 | `RAG_EMBEDDING_DIMENSIONS` | `1536` | Embedding dimensionality for the configured model. |
 | `RAG_CHUNK_SIZE` | `1000` | TXT chunk size for Ask the Vault ingest. |
 | `RAG_CHUNK_OVERLAP` | `150` | TXT chunk overlap for Ask the Vault ingest. |
+| `RAG_LLM_MODEL` | `gpt-4.1-mini` | Chat model used for Ask the Vault answer streaming. |
+| `ASKVAULT_RAG_E2E_FAKE` | `False` | DEBUG-only deterministic fake RAG mode for Docker E2E smoke tests. |
 | `DEFAULT_PAGE_SIZE` | `20` | Default list pagination size. |
 | `MAX_PAGE_SIZE` | `100` | Maximum list pagination size. |
 
