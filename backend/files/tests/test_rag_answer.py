@@ -1,8 +1,15 @@
+import logging
+
+import pytest
 from django.conf import settings
 from django.test import override_settings
 
 from files.services import rag_answer
-from files.services.rag_answer import RagAnswerService, build_answer_messages
+from files.services.rag_answer import (
+    RagAnswerService,
+    build_answer_messages,
+    chunk_content_to_text,
+)
 from files.tests._rag_test_helpers import FILE_A, FILE_B, doc
 
 
@@ -93,7 +100,12 @@ def test_stream_answer_tokens_yields_only_non_empty_content_chunks(monkeypatch):
         FakeChunk(""),
         FakeChunk("alpha"),
         FakeChunk(None),
-        FakeChunk([{"text": ""}, {"text": " beta"}]),
+        FakeChunk(
+            [
+                {"type": "text", "text": ""},
+                {"type": "text", "text": " beta"},
+            ]
+        ),
         FakeChunk({"ignored": "shape"}),
     ]
     monkeypatch.setattr(rag_answer, "ChatOpenAI", FakeChatOpenAI)
@@ -106,3 +118,45 @@ def test_stream_answer_tokens_yields_only_non_empty_content_chunks(monkeypatch):
     )
 
     assert tokens == ["alpha", " beta"]
+
+
+def test_chunk_content_to_text_ignores_non_text_blocks():
+    assert (
+        chunk_content_to_text(
+            FakeChunk(
+                [
+                    {"type": "reasoning", "text": "hidden reasoning"},
+                    {"type": "tool_use_input", "text": "hidden tool input"},
+                    {"text": "legacy shape without type"},
+                    {"type": "text", "text": "visible"},
+                    " literal",
+                ]
+            )
+        )
+        == "visible literal"
+    )
+
+
+def test_chunk_content_to_text_rejects_unexpected_chunk_shape():
+    with pytest.raises(TypeError, match="Unexpected stream chunk type: str"):
+        chunk_content_to_text("bare chunk")
+
+
+@override_settings(DEBUG=False, OPENAI_API_KEY="")
+def test_missing_openai_key_logs_runtime_error_once_when_debug_false(caplog):
+    rag_answer._missing_openai_key_logged = False
+    caplog.set_level(logging.ERROR, logger="files.services.rag_answer")
+
+    rag_answer.log_missing_openai_key_for_production()
+    rag_answer.log_missing_openai_key_for_production()
+
+    records = [
+        record
+        for record in caplog.records
+        if "without OPENAI_API_KEY" in record.getMessage()
+    ]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[0] is RuntimeError
+
+    rag_answer._missing_openai_key_logged = False

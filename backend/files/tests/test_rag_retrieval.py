@@ -390,6 +390,10 @@ async def assert_ws_retrieval_exception_resets_state_for_retry(monkeypatch):
             protocol.FIELD_QUESTION: "First question?",
         }
     )
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_ERROR,
+        protocol.FIELD_CODE: protocol.ERROR_LLM_FAILED,
+    }
     assert await communicator.receive_nothing(timeout=0.05, interval=0.01)
 
     await communicator.send_json_to(

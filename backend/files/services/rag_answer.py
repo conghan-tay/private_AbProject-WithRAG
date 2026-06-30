@@ -1,7 +1,34 @@
+import logging
+
 from django.conf import settings
 from langchain_openai import ChatOpenAI
 
 from files import rag_protocol as protocol
+
+
+logger = logging.getLogger(__name__)
+_missing_openai_key_logged = False
+
+
+def log_missing_openai_key_for_production():
+    global _missing_openai_key_logged
+
+    if _missing_openai_key_logged:
+        return
+    if settings.DEBUG:
+        return
+    if str(settings.OPENAI_API_KEY or "").strip():
+        return
+
+    _missing_openai_key_logged = True
+    logger.error(
+        "AskTheVault RAG LLM streaming is configured without OPENAI_API_KEY "
+        "while DEBUG is False.",
+        exc_info=RuntimeError("OPENAI_API_KEY is required for RAG LLM streaming"),
+    )
+
+
+log_missing_openai_key_for_production()
 
 
 SYSTEM_PROMPT = """You are a retrieval-grounded assistant for a secure forensic file vault.
@@ -50,7 +77,10 @@ class RagAnswerService:
 
 
 def chunk_content_to_text(chunk):
-    content = getattr(chunk, "content", chunk)
+    if not hasattr(chunk, "content"):
+        raise TypeError(f"Unexpected stream chunk type: {type(chunk).__name__}")
+
+    content = chunk.content
 
     if isinstance(content, str):
         return content
@@ -60,7 +90,7 @@ def chunk_content_to_text(chunk):
         for item in content:
             if isinstance(item, str):
                 parts.append(item)
-            elif isinstance(item, dict):
+            elif isinstance(item, dict) and item.get("type") == "text":
                 text = item.get("text")
                 if isinstance(text, str):
                     parts.append(text)

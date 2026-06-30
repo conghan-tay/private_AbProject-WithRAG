@@ -15,6 +15,7 @@ from files.services.rag_ingest import TxtIngestService
 
 
 logger = logging.getLogger(__name__)
+_STREAM_END = object()
 
 
 class AskVaultConsumer(AsyncWebsocketConsumer):
@@ -183,6 +184,13 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
                 "rag answer failed for session %s",
                 self.rag_session_id,
             )
+            try:
+                await self.send_error(protocol.ERROR_LLM_FAILED)
+            except Exception:
+                logger.exception(
+                    "rag answer failed to notify client for session %s",
+                    self.rag_session_id,
+                )
         finally:
             if self.state == protocol.STATE_ANSWERING:
                 self.state = protocol.STATE_READY
@@ -250,6 +258,7 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             yield message
 
     async def generate_answer_messages(self, question, documents, sources):
+        token_iterator = None
         try:
             token_iterator = await sync_to_async(
                 self.stream_answer_tokens,
@@ -259,9 +268,9 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             while True:
                 token = await sync_to_async(
                     next_stream_token,
-                    thread_sensitive=True,
+                    thread_sensitive=False,
                 )(token_iterator)
-                if token is None:
+                if token is _STREAM_END:
                     break
                 yield {
                     protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_TOKEN,
@@ -277,6 +286,17 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
                 protocol.FIELD_CODE: protocol.ERROR_LLM_FAILED,
             }
             return
+        finally:
+            if token_iterator is not None:
+                close = getattr(token_iterator, "close", None)
+                if close is not None:
+                    try:
+                        await sync_to_async(close, thread_sensitive=False)()
+                    except Exception:
+                        logger.exception(
+                            "rag llm stream cleanup failed for session %s",
+                            self.rag_session_id,
+                        )
 
         yield {
             protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_DONE,
@@ -318,4 +338,4 @@ def next_stream_token(token_iterator):
     try:
         return next(token_iterator)
     except StopIteration:
-        return None
+        return _STREAM_END
