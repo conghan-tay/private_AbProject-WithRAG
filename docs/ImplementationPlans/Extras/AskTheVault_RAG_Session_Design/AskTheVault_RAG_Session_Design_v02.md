@@ -311,7 +311,7 @@ Ingest complete:
 If no requested files are indexed, the terminal selection response is:
 
 ```json
-{ "type": "error", "code": "no_documents", "message": "No supported owned TXT files were selected." }
+{ "type": "error", "code": "no_documents" }
 ```
 
 Token stream:
@@ -335,7 +335,7 @@ No-answer short-circuit:
 Error:
 
 ```json
-{ "type": "error", "code": "not_ready", "message": "Documents are still being indexed." }
+{ "type": "error", "code": "not_ready" }
 ```
 
 Error codes:
@@ -626,7 +626,7 @@ During a grounded answer:
 If the external LLM fails after partial tokens:
 
 ```json
-{ "type": "error", "code": "llm_failed", "message": "Answer generation failed." }
+{ "type": "error", "code": "llm_failed" }
 ```
 
 No `done` is sent after failure.

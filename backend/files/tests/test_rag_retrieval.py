@@ -9,12 +9,15 @@ from django.test import override_settings
 
 from core.asgi import application
 from files import rag_protocol as protocol
+from files.tests._rag_test_helpers import (
+    ASK_VAULT_PATH,
+    FILE_A,
+    FILE_B,
+    FakeDocument,
+    connect_ready_communicator,
+    doc,
+)
 
-
-ASK_VAULT_PATH = "/ws/ask-vault/?user_id=rag-user"
-
-FILE_A = "11111111-1111-1111-1111-111111111111"
-FILE_B = "22222222-2222-2222-2222-222222222222"
 FILE_C = "33333333-3333-3333-3333-333333333333"
 
 
@@ -25,12 +28,6 @@ class FakeEmbedding:
 
 class FakeEphemeralClient:
     pass
-
-
-class FakeDocument:
-    def __init__(self, page_content, metadata):
-        self.page_content = page_content
-        self.metadata = metadata
 
 
 class FakeRetriever:
@@ -101,20 +98,6 @@ def import_rag_index_with_fakes(monkeypatch):
     install_fake_rag_dependencies(monkeypatch)
     sys.modules.pop("files.services.rag_index", None)
     return importlib.import_module("files.services.rag_index")
-
-
-def doc(text, file_id, chunk_index=0):
-    return FakeDocument(
-        page_content=text,
-        metadata={
-            protocol.FIELD_USER_ID: "rag-user",
-            protocol.FIELD_FILE_ID: file_id,
-            protocol.FIELD_STORAGE_FILE_ID: file_id,
-            protocol.FIELD_ORIGINAL_FILENAME: f"{file_id}.txt",
-            protocol.FIELD_FILE_TYPE: protocol.SUPPORTED_TEXT_MIME_TYPE,
-            protocol.FIELD_CHUNK_INDEX: chunk_index,
-        },
-    )
 
 
 def test_rag_retrieval_settings_defaults_are_configured():
@@ -256,58 +239,6 @@ def test_retrieve_deduplicates_file_ids_across_chunks(monkeypatch):
     result = index.retrieve("alpha or beta?")
 
     assert result[protocol.FIELD_SOURCES] == [FILE_A, FILE_B]
-
-
-class FakeSessionIndex:
-    def __init__(self, result):
-        self.result = result
-        self.questions = []
-
-    def retrieve(self, question):
-        self.questions.append(question)
-        return self.result
-
-    def cleanup(self):
-        pass
-
-
-async def connect_ready_communicator(monkeypatch, retrieve_result):
-    from files.consumers import AskVaultConsumer
-    fake_index = FakeSessionIndex(retrieve_result)
-
-    async def instant_ingest(self, file_ids):
-        self.session_index = fake_index
-        return {
-            protocol.FIELD_INDEXED_FILES: len(file_ids),
-            protocol.FIELD_SKIPPED_FILES: [],
-        }
-
-    monkeypatch.setattr(AskVaultConsumer, "run_ingest", instant_ingest)
-
-    communicator = WebsocketCommunicator(application, ASK_VAULT_PATH)
-    connected, _ = await communicator.connect()
-    assert connected is True
-    assert await communicator.receive_json_from() == {
-        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_STATUS,
-        protocol.FIELD_STATE: protocol.STATE_CONNECTED_NO_DOCUMENTS,
-    }
-
-    await communicator.send_json_to(
-        {
-            protocol.FIELD_ACTION: protocol.ACTION_SELECT,
-            protocol.FIELD_FILE_IDS: [FILE_A],
-        }
-    )
-    assert await communicator.receive_json_from() == {
-        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_STATUS,
-        protocol.FIELD_STATE: protocol.STATE_INGESTING,
-    }
-    assert await communicator.receive_json_from() == {
-        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_READY,
-        protocol.FIELD_INDEXED_FILES: 1,
-        protocol.FIELD_SKIPPED_FILES: [],
-    }
-    return communicator, fake_index
 
 
 async def assert_ws_no_answer_does_not_call_answer_generation(monkeypatch):

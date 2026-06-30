@@ -38,3 +38,6 @@ Current baseline verified: `test_rag_ws_protocol.py` and `test_rag_retrieval.py`
 - Step 10 is tests-only, matching the v02 TDD Build Plan.
 - Step 11 will add the production implementation for prompt assembly and the sync/async LLM streaming bridge.
 - It is acceptable for the new Step 10 tests to be red immediately after this slice.
+- Step 10 pins a sync iterator token-stream hook, but does not test that
+  iteration is offloaded from the event loop; Step 11 implementation tests must
+  verify that sync LLM iteration runs off the shared Channels event loop.
