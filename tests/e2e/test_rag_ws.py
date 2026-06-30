@@ -121,6 +121,9 @@ async def assert_upload_select_ask_streams_tokens_and_sources() -> None:
                 continue
             if message["type"] == "done":
                 assert tokens
+                answer_text = "".join(tokens)
+                assert "Fake RAG answer" in answer_text, answer_text
+                assert "Grounded in 1 source file(s)" in answer_text, answer_text
                 assert message["sources"] == [uploaded["id"]]
                 break
             pytest.fail(f"Unexpected Ask the Vault message: {message}")
