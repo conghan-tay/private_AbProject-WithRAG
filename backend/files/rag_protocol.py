@@ -40,6 +40,7 @@ STATE_READY = "ready"
 ERROR_ALREADY_SELECTED = "already_selected"
 ERROR_BAD_REQUEST = "bad_request"
 ERROR_BUSY = "busy"
+ERROR_LLM_FAILED = "llm_failed"
 ERROR_NO_DOCUMENTS = "no_documents"
 ERROR_NOT_READY = "not_ready"
 
