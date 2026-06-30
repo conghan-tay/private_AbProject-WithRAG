@@ -9,11 +9,13 @@ from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from files import rag_protocol as protocol
+from files.services.rag_answer import RagAnswerService
 from files.services.rag_index import RagSessionIndex
 from files.services.rag_ingest import TxtIngestService
 
 
 logger = logging.getLogger(__name__)
+_STREAM_END = object()
 
 
 class AskVaultConsumer(AsyncWebsocketConsumer):
@@ -182,6 +184,13 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
                 "rag answer failed for session %s",
                 self.rag_session_id,
             )
+            try:
+                await self.send_error(protocol.ERROR_LLM_FAILED)
+            except Exception:
+                logger.exception(
+                    "rag answer failed to notify client for session %s",
+                    self.rag_session_id,
+                )
         finally:
             if self.state == protocol.STATE_ANSWERING:
                 self.state = protocol.STATE_READY
@@ -249,10 +258,53 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             yield message
 
     async def generate_answer_messages(self, question, documents, sources):
+        token_iterator = None
+        try:
+            token_iterator = await sync_to_async(
+                self.stream_answer_tokens,
+                thread_sensitive=True,
+            )(question, documents)
+
+            while True:
+                token = await sync_to_async(
+                    next_stream_token,
+                    thread_sensitive=False,
+                )(token_iterator)
+                if token is _STREAM_END:
+                    break
+                yield {
+                    protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_TOKEN,
+                    protocol.FIELD_DATA: token,
+                }
+        except Exception:
+            logger.exception(
+                "rag llm streaming failed for session %s",
+                self.rag_session_id,
+            )
+            yield {
+                protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_ERROR,
+                protocol.FIELD_CODE: protocol.ERROR_LLM_FAILED,
+            }
+            return
+        finally:
+            if token_iterator is not None:
+                close = getattr(token_iterator, "close", None)
+                if close is not None:
+                    try:
+                        await sync_to_async(close, thread_sensitive=False)()
+                    except Exception:
+                        logger.exception(
+                            "rag llm stream cleanup failed for session %s",
+                            self.rag_session_id,
+                        )
+
         yield {
             protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_DONE,
             protocol.FIELD_SOURCES: sources,
         }
+
+    def stream_answer_tokens(self, question, retrieved_documents):
+        return RagAnswerService().stream_answer_tokens(question, retrieved_documents)
 
     async def send_json(self, payload):
         await self.send(text_data=json.dumps(payload))
@@ -280,3 +332,10 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             valid_file_ids.append(file_id)
 
         return valid_file_ids
+
+
+def next_stream_token(token_iterator):
+    try:
+        return next(token_iterator)
+    except StopIteration:
+        return _STREAM_END

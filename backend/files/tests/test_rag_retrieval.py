@@ -296,6 +296,14 @@ def test_ws_no_answer_does_not_call_answer_generation(monkeypatch):
 
 
 async def assert_ws_relevant_answer_terminates_with_sorted_sources(monkeypatch):
+    from files.consumers import AskVaultConsumer
+
+    monkeypatch.setattr(
+        AskVaultConsumer,
+        "stream_answer_tokens",
+        lambda self, question, documents: iter([]),
+    )
+
     communicator, fake_index = await connect_ready_communicator(
         monkeypatch,
         {
@@ -347,6 +355,11 @@ async def assert_ws_retrieval_exception_resets_state_for_retry(monkeypatch):
             pass
 
     fake_index = FlakySessionIndex()
+    monkeypatch.setattr(
+        AskVaultConsumer,
+        "stream_answer_tokens",
+        lambda self, question, documents: iter([]),
+    )
 
     async def instant_ingest(self, file_ids):
         self.session_index = fake_index
@@ -377,6 +390,10 @@ async def assert_ws_retrieval_exception_resets_state_for_retry(monkeypatch):
             protocol.FIELD_QUESTION: "First question?",
         }
     )
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_ERROR,
+        protocol.FIELD_CODE: protocol.ERROR_LLM_FAILED,
+    }
     assert await communicator.receive_nothing(timeout=0.05, interval=0.01)
 
     await communicator.send_json_to(
