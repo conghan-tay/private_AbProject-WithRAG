@@ -65,6 +65,12 @@ class RagAnswerService:
     """Build grounded prompts and stream answer tokens from the configured LLM."""
 
     def stream_answer_tokens(self, question, retrieved_documents):
+        if settings.ASKVAULT_RAG_E2E_FAKE:
+            from files.services.rag_fake import stream_fake_answer_tokens
+
+            yield from stream_fake_answer_tokens(question, retrieved_documents)
+            return
+
         llm = ChatOpenAI(
             model=settings.RAG_LLM_MODEL,
             temperature=0,

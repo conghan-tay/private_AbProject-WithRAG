@@ -14,14 +14,10 @@ class RagSessionIndex:
     def __init__(self, session_id):
         import chromadb
         from langchain_chroma import Chroma
-        from langchain_openai import OpenAIEmbeddings
 
         self.session_id = session_id
         self.chroma_client = chromadb.EphemeralClient()
-        self.embedding_function = OpenAIEmbeddings(
-            model=settings.RAG_EMBEDDING_MODEL,
-            dimensions=settings.RAG_EMBEDDING_DIMENSIONS,
-        )
+        self.embedding_function = self._embedding_function()
         self.vector_store = Chroma(
             client=self.chroma_client,
             collection_name=f"askvault-{session_id}",
@@ -101,3 +97,19 @@ class RagSessionIndex:
             self.vector_store = None
             self.chroma_client = None
             self.embedding_function = None
+
+    @staticmethod
+    def _embedding_function():
+        if settings.ASKVAULT_RAG_E2E_FAKE:
+            from files.services.rag_fake import DeterministicE2EEmbeddings
+
+            return DeterministicE2EEmbeddings(
+                dimensions=settings.RAG_EMBEDDING_DIMENSIONS,
+            )
+
+        from langchain_openai import OpenAIEmbeddings
+
+        return OpenAIEmbeddings(
+            model=settings.RAG_EMBEDDING_MODEL,
+            dimensions=settings.RAG_EMBEDDING_DIMENSIONS,
+        )

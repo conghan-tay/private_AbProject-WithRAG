@@ -11,6 +11,11 @@ WS_PORT=8001
 WS_PATH="/ws/ask-vault/?user_id=local-dev"
 WS_MISSING_USER_PATH="/ws/ask-vault/"
 WAIT_SECONDS=90
+PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
+
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN="${PYTHON:-python}"
+fi
 
 cleanup() {
   local status=$?
@@ -24,6 +29,8 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+export ASKVAULT_RAG_E2E_FAKE=True
 
 echo "Starting Docker Compose stack..."
 docker compose up --build -d
@@ -105,3 +112,8 @@ print("WebSocket OK: accepted valid user_id and rejected missing user_id")
 PY
 
 echo "Docker runtime smoke checks passed."
+
+echo "Running Ask the Vault RAG E2E smoke..."
+RUN_ASKVAULT_RAG_E2E=1 "$PYTHON_BIN" -m pytest tests/e2e/test_rag_ws.py -q
+
+echo "Ask the Vault RAG E2E smoke passed."
