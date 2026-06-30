@@ -29,6 +29,8 @@ MESSAGE_TYPE_READY = "ready"
 MESSAGE_TYPE_STATUS = "status"
 MESSAGE_TYPE_TOKEN = "token"
 
+REASON_NOT_IN_DOCUMENTS = "not_in_documents"
+
 STATE_ANSWERING = "answering"
 STATE_CONNECTED_NO_DOCUMENTS = "connected_no_documents"
 STATE_DISCONNECTED = "disconnected"

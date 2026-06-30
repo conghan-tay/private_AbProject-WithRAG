@@ -136,6 +136,13 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             if self.state == protocol.STATE_DISCONNECTED:
                 return
 
+            if result.get(protocol.FIELD_INDEXED_FILES, 0) == 0:
+                self.state = protocol.STATE_CONNECTED_NO_DOCUMENTS
+                self.ingested_chunks = []
+                await self.cleanup_session_index()
+                await self.send_error(protocol.ERROR_NO_DOCUMENTS)
+                return
+
             self.state = protocol.STATE_READY
             await self.send_json(
                 {
@@ -168,10 +175,16 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
                     return
                 await self.send_json(message)
 
-            if self.state != protocol.STATE_DISCONNECTED:
-                self.state = protocol.STATE_READY
         except asyncio.CancelledError:
             raise
+        except Exception:
+            logger.exception(
+                "rag answer failed for session %s",
+                self.rag_session_id,
+            )
+        finally:
+            if self.state == protocol.STATE_ANSWERING:
+                self.state = protocol.STATE_READY
 
     async def run_ingest(self, file_ids):
         return await sync_to_async(
@@ -209,9 +222,36 @@ class AskVaultConsumer(AsyncWebsocketConsumer):
             pass
 
     async def run_answer(self, question):
+        if self.session_index is None:
+            yield {
+                protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_NO_ANSWER,
+                protocol.FIELD_REASON: protocol.REASON_NOT_IN_DOCUMENTS,
+            }
+            return
+
+        result = await sync_to_async(
+            self.session_index.retrieve,
+            thread_sensitive=True,
+        )(question)
+
+        if not result["answerable"]:
+            yield {
+                protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_NO_ANSWER,
+                protocol.FIELD_REASON: protocol.REASON_NOT_IN_DOCUMENTS,
+            }
+            return
+
+        async for message in self.generate_answer_messages(
+            question,
+            result["documents"],
+            result[protocol.FIELD_SOURCES],
+        ):
+            yield message
+
+    async def generate_answer_messages(self, question, documents, sources):
         yield {
             protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_DONE,
-            protocol.FIELD_SOURCES: [],
+            protocol.FIELD_SOURCES: sources,
         }
 
     async def send_json(self, payload):

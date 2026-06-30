@@ -63,6 +63,8 @@ def test_ask_vault_protocol_constants_match_documented_wire_contract():
     assert protocol.MESSAGE_TYPE_STATUS == "status"
     assert protocol.MESSAGE_TYPE_TOKEN == "token"
 
+    assert protocol.REASON_NOT_IN_DOCUMENTS == "not_in_documents"
+
     assert protocol.STATE_ANSWERING == "answering"
     assert protocol.STATE_CONNECTED_NO_DOCUMENTS == "connected_no_documents"
     assert protocol.STATE_DISCONNECTED == "disconnected"
@@ -468,6 +470,60 @@ async def assert_ingest_exception_resets_state_for_retry(monkeypatch):
 
 def test_ingest_exception_resets_state_for_retry(monkeypatch):
     async_to_sync(assert_ingest_exception_resets_state_for_retry)(monkeypatch)
+
+
+async def assert_no_indexed_documents_resets_state_for_retry(monkeypatch):
+    calls = 0
+
+    async def no_documents_then_success(self, file_ids):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                protocol.FIELD_INDEXED_FILES: 0,
+                protocol.FIELD_SKIPPED_FILES: [
+                    {
+                        protocol.FIELD_FILE_ID: file_ids[0],
+                        protocol.FIELD_REASON: protocol.SKIP_NOT_FOUND_OR_NOT_OWNED,
+                    }
+                ],
+            }
+
+        return {
+            protocol.FIELD_INDEXED_FILES: len(file_ids),
+            protocol.FIELD_SKIPPED_FILES: [],
+        }
+
+    patch_consumer_hook(monkeypatch, "run_ingest", no_documents_then_success)
+    communicator, connected, _ = await connect_communicator()
+    assert connected is True
+    await communicator.receive_json_from()
+
+    await communicator.send_json_to(select_message())
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_STATUS,
+        protocol.FIELD_STATE: protocol.STATE_INGESTING,
+    }
+    assert_error(await communicator.receive_json_from(), protocol.ERROR_NO_DOCUMENTS)
+    assert await communicator.receive_nothing(timeout=0.05, interval=0.01)
+
+    await communicator.send_json_to(select_message())
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_STATUS,
+        protocol.FIELD_STATE: protocol.STATE_INGESTING,
+    }
+    assert await communicator.receive_json_from() == {
+        protocol.FIELD_TYPE: protocol.MESSAGE_TYPE_READY,
+        protocol.FIELD_INDEXED_FILES: 1,
+        protocol.FIELD_SKIPPED_FILES: [],
+    }
+    assert calls == 2
+
+    await communicator.disconnect()
+
+
+def test_no_indexed_documents_resets_state_for_retry(monkeypatch):
+    async_to_sync(assert_no_indexed_documents_resets_state_for_retry)(monkeypatch)
 
 
 async def assert_select_while_ready_returns_already_selected(monkeypatch):
